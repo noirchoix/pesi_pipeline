@@ -44,3 +44,4 @@ raw/
 *.joblib
 *.pkl
 *.pt
+*.sqlite
