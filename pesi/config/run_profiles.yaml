@@ -1,0 +1,24 @@
+audit:
+  uniprot_rows: 300
+  cazy_rows: 300
+  plantmet_edges: 300
+  plantcyc_triples: 300
+  enzyme_smi_pairs: 300
+medium:
+  uniprot_rows: 10000
+  cazy_rows: 25000
+  plantmet_edges: 50000
+  plantcyc_triples: 50000
+  enzyme_smi_pairs: 25000
+large:
+  uniprot_rows: 100000
+  cazy_rows: 250000
+  plantmet_edges: 500000
+  plantcyc_triples: 500000
+  enzyme_smi_pairs: 100000
+full:
+  uniprot_rows: null
+  cazy_rows: null
+  plantmet_edges: null
+  plantcyc_triples: null
+  enzyme_smi_pairs: null

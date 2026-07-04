@@ -1,0 +1,171 @@
+{
+  "family_classifier": {
+    "status": "trained",
+    "train_rows": 7785,
+    "test_rows": 2596,
+    "total_labeled_rows_used": 10381,
+    "classes": [
+      "Aminotransferase",
+      "BAHD acyltransferase",
+      "Cytochrome P450",
+      "Dioxygenase",
+      "GDSL lipase esterase",
+      "Methyltransferase",
+      "Peroxidase",
+      "Polyketide synthase",
+      "UDP glycosyltransferase"
+    ],
+    "classification_report": {
+      "Aminotransferase": {
+        "precision": 1.0,
+        "recall": 0.996996996996997,
+        "f1-score": 0.9984962406015038,
+        "support": 333.0
+      },
+      "BAHD acyltransferase": {
+        "precision": 0.991044776119403,
+        "recall": 0.996996996996997,
+        "f1-score": 0.9940119760479041,
+        "support": 333.0
+      },
+      "Cytochrome P450": {
+        "precision": 0.7319034852546917,
+        "recall": 0.8198198198198198,
+        "f1-score": 0.773371104815864,
+        "support": 333.0
+      },
+      "Dioxygenase": {
+        "precision": 0.7923875432525952,
+        "recall": 0.6856287425149701,
+        "f1-score": 0.7351524879614767,
+        "support": 334.0
+      },
+      "GDSL lipase esterase": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 42.0
+      },
+      "Methyltransferase": {
+        "precision": 0.9910714285714286,
+        "recall": 1.0,
+        "f1-score": 0.9955156950672646,
+        "support": 333.0
+      },
+      "Peroxidase": {
+        "precision": 0.9939759036144579,
+        "recall": 0.990990990990991,
+        "f1-score": 0.9924812030075187,
+        "support": 333.0
+      },
+      "Polyketide synthase": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 221.0
+      },
+      "UDP glycosyltransferase": {
+        "precision": 0.9940476190476191,
+        "recall": 1.0,
+        "f1-score": 0.9970149253731343,
+        "support": 334.0
+      },
+      "accuracy": 0.9345146379044684,
+      "macro avg": {
+        "precision": 0.9438256395400217,
+        "recall": 0.9433815052577528,
+        "f1-score": 0.9428937369860741,
+        "support": 2596.0
+      },
+      "weighted avg": {
+        "precision": 0.9350662083450482,
+        "recall": 0.9345146379044684,
+        "f1-score": 0.9339694519108622,
+        "support": 2596.0
+      }
+    },
+    "required_label_key": "curated_family",
+    "label_recovery_keys": [
+      "curated_family",
+      "source_resource",
+      "source_file",
+      "filename",
+      "file_name",
+      "path",
+      "workbook"
+    ],
+    "evidence_class": "real_evidence_labels",
+    "label_source": "curated_family",
+    "family_column_policy": "`family` is taxonomy; never used as target label"
+  },
+  "enzyme_smi_interaction_model": {
+    "status": "trained",
+    "train_rows": 18000,
+    "test_rows": 6000,
+    "roc_auc_proxy_negatives": 0.24837661111111112,
+    "negative_sampling_warning": "Negatives are mismatched sequence/SMILES proxy negatives, not experimentally confirmed non-interactions.",
+    "training_hardening": {
+      "max_iter": 3000,
+      "tol": 0.0001,
+      "early_stopping": true,
+      "n_iter_no_change": 10,
+      "purpose": "avoid medium/full-profile SGD convergence warnings while preserving deterministic proxy-training semantics"
+    },
+    "evidence_class": "real_positive_labels_plus_proxy_negative_labels"
+  },
+  "aim2_signature_evaluation": {
+    "status": "evaluated",
+    "rows": 5019,
+    "clusters": 8,
+    "adjusted_rand_vs_enzyme_family": 0.5479485704266662,
+    "adjusted_rand_vs_target_class": 0.3306404059966399,
+    "metric_interpretation": "ARI is not expected to be maximal; divergence supports testing whether enzyme-state signatures differ from taxonomy/family labels.",
+    "evidence_class": "model_inference"
+  },
+  "aim3_critical_transition_model": {
+    "status": "trained",
+    "training_label": "anchor_hit_from_known_targets_and_curated_pass_flags",
+    "evidence_class": "proxy_evidence_label",
+    "feature_importances": {
+      "pathway_essentiality_score": 0.33960787889809857,
+      "kinetic_evidence_score": 0.31604420303585556,
+      "organism_evidence_score": 0.09584416304875124,
+      "plant_context_score": 3.1595882104199013e-06,
+      "structure_score": 0.01185770811604964,
+      "crop_selectivity_margin": 0.11970748932255541,
+      "natural_inhibitor_evidence_score": 0.0,
+      "uncertainty_penalty": 0.10171519753215409,
+      "trajectory_curvature_max": 0.015220200458325108
+    },
+    "ranked_rows_after_dedup": 569,
+    "ranked_rows_after_semantic_dedup": 569,
+    "semantic_dedupe_keys": [
+      "enzyme_name_canonical",
+      "enzyme_family",
+      "stage_assigned",
+      "target_class"
+    ],
+    "semantic_deduplication": true,
+    "known_target_base_rate_after_dedup": 0.8347978910369068,
+    "high_confidence_known_target_base_rate_after_dedup": 0.05975395430579965
+  },
+  "aim4_optimized_rows": 1000,
+  "aim4_inhibit_synergy_group_rows": 1000,
+  "scenario_selectivity_rows": 56,
+  "pseudo_lab_rows": 350,
+  "axioms_implemented": [
+    "finite_enzyme_processes_as_enzyme_universe_and_stage_anchors",
+    "discrete_transitions_as_development_stage_nodes_and_trajectory_curvature",
+    "genetic_biochemical_environmental_context_as_feature_groups_and_uncertainty_penalties"
+  ],
+  "hypotheses_operationalized": [
+    "enzyme_state_signatures_vs_family/taxonomy-like_labels",
+    "critical_transition_enzyme_ranking_from_pathway_kinetic_lifecycle_data",
+    "naturally_derived_combination_optimization_with_explicit_proxy_synergy"
+  ],
+  "optimization_objectives_implemented": [
+    "maximize_predicted_weed_perturbation",
+    "penalize_crop_impact_and_low_selectivity",
+    "penalize_persistence_hazard_and_uncertainty"
+  ]
+}

@@ -1,0 +1,81 @@
+{
+  "status": "optimized",
+  "candidate_rows": 1000,
+  "compounds_used": 216,
+  "targets_used": 56,
+  "target_dedupe_keys": [
+    "target_name_canonical",
+    "enzyme_family",
+    "stage_assigned"
+  ],
+  "intervention_dedupe_keys": [
+    "target_enzyme_canonical",
+    "target_family_canonical",
+    "stage_canonical",
+    "compound_pair_canonical"
+  ],
+  "semantic_deduplication": true,
+  "compound_pair_policy": "unordered_pair",
+  "compound_filter_policy": "controls_retained_in_compound_pool_but_downranked_in_recommendations",
+  "diversity_selection_report": {
+    "selection_policy": "fast_portfolio_breadth_selector_v2",
+    "input_rows": 21168,
+    "deduplicated_input_rows": 21168,
+    "target_rows": 1000,
+    "selected_rows": 1000,
+    "selection_phases": {
+      "strict_linear_fill": 541,
+      "family_floor_seed": 185,
+      "breadth_cap_plus_25pct": 175,
+      "compound_breadth_seed": 45,
+      "target_breadth_seed_2": 23,
+      "target_breadth_seed_1": 22,
+      "target_breadth_seed_3": 9
+    },
+    "relaxation_events": [
+      "breadth_cap_plus_25pct:added_175"
+    ],
+    "family_floor": 20,
+    "family_cap_effective": 110,
+    "target_cap_effective": 45,
+    "compound_cap_effective": 180,
+    "stage_cap_effective": 600,
+    "phytochemical_cap_effective": 260,
+    "phytochemical_pair_cap_effective": 90,
+    "unique_targets": 43,
+    "unique_target_families": 14,
+    "unique_compound_pairs": 292,
+    "unique_compounds": 65,
+    "unique_phytochemical_classes": 7,
+    "unique_phytochemical_class_pairs": 28,
+    "target_family_entropy_normalized": 0.9607737798555556,
+    "stage_entropy_normalized": 0.8203762911143907,
+    "max_observed_per_target": 57,
+    "max_observed_per_target_family": 138,
+    "max_observed_per_compound_pair": 12,
+    "max_observed_per_compound": 180,
+    "max_observed_per_stage": 316,
+    "max_observed_per_phytochemical_class": 325,
+    "max_observed_per_phytochemical_class_pair": 101,
+    "caps": {
+      "max_rows_requested": 1000,
+      "target_rows_effective": 1000,
+      "max_per_target_effective": 45,
+      "max_per_target_family_requested": 110,
+      "max_per_target_family_effective": 110,
+      "min_per_target_family_floor": 20,
+      "max_per_compound_pair": 12,
+      "max_per_compound_requested": 180,
+      "max_per_compound_effective": 180,
+      "max_per_stage_effective": 600,
+      "max_per_phytochemical_class_effective": 260,
+      "max_per_phytochemical_pair_effective": 90
+    },
+    "runtime_note": "linear_time_selector_no_repeated_global_rescoring"
+  },
+  "synergy_groups": 1000,
+  "epsilon_threshold": 0.92,
+  "objective": "maximize predicted enzyme-state perturbation and typed inhibit-synergy while penalizing crop impact, persistence, hazard, generic controls, reactive aldehydes, and uncertainty",
+  "evidence_class": "model_inference_with_real_evidence_inputs",
+  "unsupported_assumption_warning": "No wet-lab synergy labels are available. All pair synergy is computationally inferred and must be validated with enzyme assays and crop/weed dose-response experiments."
+}

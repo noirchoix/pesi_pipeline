@@ -1,0 +1,99 @@
+{
+  "status": "trained",
+  "train_rows": 7785,
+  "test_rows": 2596,
+  "total_labeled_rows_used": 10381,
+  "classes": [
+    "Aminotransferase",
+    "BAHD acyltransferase",
+    "Cytochrome P450",
+    "Dioxygenase",
+    "GDSL lipase esterase",
+    "Methyltransferase",
+    "Peroxidase",
+    "Polyketide synthase",
+    "UDP glycosyltransferase"
+  ],
+  "classification_report": {
+    "Aminotransferase": {
+      "precision": 1.0,
+      "recall": 0.996996996996997,
+      "f1-score": 0.9984962406015038,
+      "support": 333.0
+    },
+    "BAHD acyltransferase": {
+      "precision": 0.991044776119403,
+      "recall": 0.996996996996997,
+      "f1-score": 0.9940119760479041,
+      "support": 333.0
+    },
+    "Cytochrome P450": {
+      "precision": 0.7319034852546917,
+      "recall": 0.8198198198198198,
+      "f1-score": 0.773371104815864,
+      "support": 333.0
+    },
+    "Dioxygenase": {
+      "precision": 0.7923875432525952,
+      "recall": 0.6856287425149701,
+      "f1-score": 0.7351524879614767,
+      "support": 334.0
+    },
+    "GDSL lipase esterase": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 42.0
+    },
+    "Methyltransferase": {
+      "precision": 0.9910714285714286,
+      "recall": 1.0,
+      "f1-score": 0.9955156950672646,
+      "support": 333.0
+    },
+    "Peroxidase": {
+      "precision": 0.9939759036144579,
+      "recall": 0.990990990990991,
+      "f1-score": 0.9924812030075187,
+      "support": 333.0
+    },
+    "Polyketide synthase": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 221.0
+    },
+    "UDP glycosyltransferase": {
+      "precision": 0.9940476190476191,
+      "recall": 1.0,
+      "f1-score": 0.9970149253731343,
+      "support": 334.0
+    },
+    "accuracy": 0.9345146379044684,
+    "macro avg": {
+      "precision": 0.9438256395400217,
+      "recall": 0.9433815052577528,
+      "f1-score": 0.9428937369860741,
+      "support": 2596.0
+    },
+    "weighted avg": {
+      "precision": 0.9350662083450482,
+      "recall": 0.9345146379044684,
+      "f1-score": 0.9339694519108622,
+      "support": 2596.0
+    }
+  },
+  "required_label_key": "curated_family",
+  "label_recovery_keys": [
+    "curated_family",
+    "source_resource",
+    "source_file",
+    "filename",
+    "file_name",
+    "path",
+    "workbook"
+  ],
+  "evidence_class": "real_evidence_labels",
+  "label_source": "curated_family",
+  "family_column_policy": "`family` is taxonomy; never used as target label"
+}

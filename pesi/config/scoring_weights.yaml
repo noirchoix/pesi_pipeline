@@ -1,0 +1,20 @@
+compound_suitability:
+  natural_product_evidence_score: 0.24
+  known_inhibitor_similarity_score: 0.20
+  active_site_compatibility_score: 0.20
+  transition_state_mimic_score: 0.14
+  functional_group_inhibition_score: 0.14
+  delivery_plausibility_score: 0.08
+  solvent_penalty: -0.26
+  reactive_aldehyde_penalty: -0.23
+  generic_assay_penalty: -0.18
+aim4_objective:
+  predicted_combined_perturbation: 0.56
+  synergy_group_score: 0.20
+  intervention_suitability_mean: 0.14
+  scenario_selectivity_margin: 0.10
+  crop_impact_estimate: -0.48
+  environmental_persistence_proxy: -0.28
+  toxicity_hazard_proxy: -0.26
+  control_compound_penalty: -0.22
+  uncertainty_penalty: -0.16

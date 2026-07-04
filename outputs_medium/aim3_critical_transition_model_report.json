@@ -1,0 +1,27 @@
+{
+  "status": "trained",
+  "training_label": "anchor_hit_from_known_targets_and_curated_pass_flags",
+  "evidence_class": "proxy_evidence_label",
+  "feature_importances": {
+    "pathway_essentiality_score": 0.33960787889809857,
+    "kinetic_evidence_score": 0.31604420303585556,
+    "organism_evidence_score": 0.09584416304875124,
+    "plant_context_score": 3.1595882104199013e-06,
+    "structure_score": 0.01185770811604964,
+    "crop_selectivity_margin": 0.11970748932255541,
+    "natural_inhibitor_evidence_score": 0.0,
+    "uncertainty_penalty": 0.10171519753215409,
+    "trajectory_curvature_max": 0.015220200458325108
+  },
+  "ranked_rows_after_dedup": 569,
+  "ranked_rows_after_semantic_dedup": 569,
+  "semantic_dedupe_keys": [
+    "enzyme_name_canonical",
+    "enzyme_family",
+    "stage_assigned",
+    "target_class"
+  ],
+  "semantic_deduplication": true,
+  "known_target_base_rate_after_dedup": 0.8347978910369068,
+  "high_confidence_known_target_base_rate_after_dedup": 0.05975395430579965
+}

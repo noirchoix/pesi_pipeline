@@ -1,0 +1,11 @@
+{
+  "node_rows": 166063,
+  "edge_rows_loaded": 50000,
+  "heterodata.pt": "raw\\plantmetwiki\\heterodata.pt",
+  "splits.pt": "raw\\plantmetwiki\\splits.pt",
+  "splits_taxa.pt": "raw\\plantmetwiki\\splits_taxa.pt",
+  "splits_pathway.pt": "raw\\plantmetwiki\\splits_pathway.pt",
+  "embeddings_metabolite.pt": "raw\\plantmetwiki\\embeddings_metabolite.pt",
+  "embeddings_protein.pt": "raw\\plantmetwiki\\embeddings_protein.pt",
+  "embeddings_gene.pt": "raw\\plantmetwiki\\embeddings_gene.pt"
+}

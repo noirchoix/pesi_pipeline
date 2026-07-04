@@ -1,0 +1,7 @@
+{
+  "status": "evaluated",
+  "scenario_id": "default_contextual_scenario",
+  "rows": 56,
+  "mean_selectivity_margin": 0.6490395348280407,
+  "evidence_class": "contextual_model_inference_requires_crop_weed_assay_validation"
+}

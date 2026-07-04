@@ -1,0 +1,22 @@
+[
+  {
+    "assumption": "Every weed has naturally sourced inhibitors for every critical enzyme",
+    "status": "not_supported_as_universal",
+    "handling": "Converted to testable hypothesis; all inhibitor availability is evidence-scored and missing direct evidence is penalized."
+  },
+  {
+    "assumption": "A/B combinations silence enzymes at critical lifecycle points",
+    "status": "not_supported_without_assay",
+    "handling": "Modeled as functional activity below threshold; outputs marked pseudo_lab_model_inference until wet-lab validation."
+  },
+  {
+    "assumption": "Crop-weed selectivity exists for every pair",
+    "status": "not_supported_as_universal",
+    "handling": "Implemented as crop_selectivity_margin with uncertainty penalty; broad conserved enzymes receive reduced margins."
+  },
+  {
+    "assumption": "Taxonomy is inferior to enzyme-state signatures",
+    "status": "hypothesis_under_test",
+    "handling": "Aim 2 compares enzyme-state clustering against family/taxonomy-like labels with ARI and recovery metrics."
+  }
+]

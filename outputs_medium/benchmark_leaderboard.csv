@@ -1,0 +1,25 @@
+benchmark,metric,value,interpretation
+enzyme_state_signatures_vs_enzyme_family,mean_family_diversity_per_cluster,4.5,higher means state clusters are not mere family labels
+enzyme_state_signatures_vs_target_class,mean_target_class_diversity_per_cluster,3.375,higher means state clusters cut across broad target classes
+criticality_model_vs_random_baseline,known_target_enrichment_at_50,1.1978947368421053,compares top-ranked critical enzymes with random prevalence of anchor/herbicide labels
+criticality_model_known_target_prevalence,known_target_base_rate,0.8347978910369068,prevalence of anchor/herbicide atlas matches used by the enrichment baseline
+criticality_model_vs_strict_known_target_baseline,high_confidence_known_target_enrichment_at_50,3.347058823529412,uses stricter positive labels: core anchors or strong primary site-of-action atlas matches
+criticality_model_high_confidence_prevalence,high_confidence_known_target_base_rate,0.05975395430579965,stricter prevalence used by the high-confidence enrichment baseline
+criticality_model_high_confidence_topk,high_confidence_known_target_top50_count,10.0,absolute strict known-target count among the top 50 critical transition candidates
+criticality_model_vs_herbicide_target_atlas,mapped_target_fraction,0.4182776801405975,fraction of ranked targets mapped to herbicide target atlas
+compound_optimizer_vs_random_pairs,unique_pair_fraction,0.292,diversity sanity check
+compound_optimizer_pair_diversity,unique_pair_count,292.0,absolute number of unordered compound pairs in final recommendations
+compound_optimizer_pair_concentration,max_pair_share,0.012,lower means no single compound pair dominates final recommendations
+compound_optimizer_compound_concentration,max_individual_compound_share,0.09,lower means no single compound dominates across pair members
+compound_optimizer_compound_diversity,unique_compound_count,65.0,absolute number of unique compounds represented in final pair recommendations
+compound_optimizer_phytochemical_class_diversity,unique_phytochemical_class_count,7.0,absolute count of coarse phytochemical/chemical classes in final recommendations
+compound_optimizer_phytochemical_class_diversity,phytochemical_class_entropy_normalized,0.9844224238924122,0 to 1; higher means selected compounds span phytochemical/chemical classes more evenly
+compound_optimizer_phytochemical_pair_concentration,max_phytochemical_pair_share,0.101,lower means no single class-pair schema dominates recommendations
+compound_optimizer_vs_single_compound_baseline,mean_pair_suitability_score,0.4164605904684359,mean suitability of selected pair members
+synergy_graph_vs_bliss_only,mean_typed_synergy_score,0.7437258696670028,typed inhibition-synergy graph score
+compound_quality_filter,control_or_low_priority_pair_rate,0.0,lower is better for final candidate list; controls retained for audit
+target_diversity,unique_target_fraction,0.043,guards against a single target dominating all interventions
+target_diversity,unique_target_count,43.0,absolute count of unique target enzymes in final recommendations
+target_concentration,max_target_share,0.057,lower means no single target dominates final recommendations
+target_family_diversity,target_family_entropy_normalized,0.9607737798555556,0 to 1; higher means target families are more evenly represented
+stage_diversity,stage_entropy_normalized,0.8203762911143907,0 to 1; higher means developmental stages are more evenly represented

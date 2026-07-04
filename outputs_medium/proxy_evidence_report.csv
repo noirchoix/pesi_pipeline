@@ -1,0 +1,6 @@
+component,proxy_type,description
+critical_transition_anchor_model,weak label,Known herbicide anchors and curated pass flags used as weak labels for model calibration.
+enzyme_smi_interaction_model,negative sampling,"Mismatched sequence/SMILES pairs are proxy negatives, not experimentally confirmed non-interactions."
+inhibitor_combination_optimizer,typed synergy inference,"Bliss/synergy score is now augmented by typed inhibition evidence edges, compound suitability, and herbicide target atlas matches; still requires lab validation."
+compound_suitability_filter,rule-based chemical credibility model,"Solvents, buffers, generic assay chemicals, and reactive aldehydes are retained for audit but down-ranked or treated as controls."
+scenario_selectivity_margin,contextual crop/weed risk proxy,"Computed from scenario taxa, target conservation, growth stage, and detox/stress rules; not a measured crop assay."

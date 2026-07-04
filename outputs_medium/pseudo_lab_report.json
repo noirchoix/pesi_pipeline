@@ -1,0 +1,6 @@
+{
+  "status": "simulated",
+  "rows": 350,
+  "model": "Hill curve; parameters derived from optimization outputs and explicitly proxy/model-inferred.",
+  "evidence_class": "pseudo_lab_model_inference"
+}

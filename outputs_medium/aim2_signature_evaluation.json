@@ -1,0 +1,9 @@
+{
+  "status": "evaluated",
+  "rows": 5019,
+  "clusters": 8,
+  "adjusted_rand_vs_enzyme_family": 0.5479485704266662,
+  "adjusted_rand_vs_target_class": 0.3306404059966399,
+  "metric_interpretation": "ARI is not expected to be maximal; divergence supports testing whether enzyme-state signatures differ from taxonomy/family labels.",
+  "evidence_class": "model_inference"
+}
