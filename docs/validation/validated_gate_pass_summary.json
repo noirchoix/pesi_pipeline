@@ -1,0 +1,51 @@
+{
+  "baseline": "PESI-KG Production Research Baseline — Audit + Medium Gate-Passing Build",
+  "audit": {
+    "production_gate_summary": {
+      "status": "passed",
+      "passed_gates": 7,
+      "total_gates": 7,
+      "failed_gates": []
+    },
+    "aim4_diversity_summary": {
+      "rows": 1000,
+      "unique_targets": 41,
+      "unique_target_families": 14,
+      "unique_pairs": 298,
+      "unique_compounds": 72,
+      "unique_phytochemical_classes": 7,
+      "phytochemical_class_entropy_normalized": 0.9802362022653839,
+      "max_target_share": 0.069,
+      "max_pair_share": 0.012,
+      "max_individual_compound_share": 0.09,
+      "max_phytochemical_pair_share": 0.104
+    }
+  },
+  "medium": {
+    "production_gate_summary": {
+      "status": "passed",
+      "passed_gates": 7,
+      "total_gates": 7,
+      "failed_gates": []
+    },
+    "aim4_diversity_summary": {
+      "rows": 1000,
+      "unique_targets": 43,
+      "unique_target_families": 14,
+      "unique_pairs": 292,
+      "unique_compounds": 65,
+      "unique_phytochemical_classes": 7,
+      "phytochemical_class_entropy_normalized": 0.9844224238924122,
+      "max_target_share": 0.057,
+      "max_pair_share": 0.012,
+      "max_individual_compound_share": 0.09,
+      "max_phytochemical_pair_share": 0.101
+    }
+  },
+  "scientific_boundary": [
+    "Computational candidate only.",
+    "Not validated for field use.",
+    "Not a formulation or application recommendation.",
+    "Requires toxicity, environmental, crop-safety, and wet-lab validation."
+  ]
+}

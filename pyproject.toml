@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pesi-v2"
-version = "0.3.0"
-description = "PESI-KG production research backend for plant enzyme-state intervention, herbicide target rules and bioherbicide synergy"
+version = "0.4.0"
+description = "PESI-KG production research platform with FastAPI, SvelteKit UI, benchmark gates and artifact-grounded interpretation"
 requires-python = ">=3.10"
 dependencies = [
   "pandas>=2.0",
@@ -23,14 +23,18 @@ dependencies = [
   "torch>=2.0",
   "pyarrow>=14.0",
   "duckdb>=0.10",
-  "pydantic>=2.0"
+  "pydantic>=2.0",
+  "uvicorn[standard]>=0.25"
 ]
 
 [tool.setuptools.packages.find]
 include = ["pesi*"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff>=0.6"]
+dev = ["pytest>=8.0", "ruff>=0.6", "httpx>=0.27"]
 
 [tool.setuptools.package-data]
 "pesi.config" = ["*.yaml"]
+
+[project.scripts]
+pesi = "pesi.cli.main:app"

@@ -1,0 +1,35 @@
+services:
+  pesi-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      PESI_API_KEY: ${PESI_API_KEY:-change-me-before-production}
+      PESI_AUTH_MODE: ${PESI_AUTH_MODE:-required}
+      PESI_CORS_ORIGINS: ${PESI_CORS_ORIGINS:-http://localhost:5173,http://localhost:4173}
+      PESI_PROJECT_ROOT: /app
+      PESI_OUT_DIR: outputs
+      PESI_ARTIFACT_DIR: artifacts
+      PESI_FALLBACK_OUT_DIR: outputs_medium
+      PESI_FALLBACK_ARTIFACT_DIR: artifacts_medium
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./raw:/app/raw
+      - ./outputs:/app/outputs
+      - ./artifacts:/app/artifacts
+      - ./outputs_medium:/app/outputs_medium
+      - ./artifacts_medium:/app/artifacts_medium
+      - ./.pesi_runs:/app/.pesi_runs
+
+  pesi-web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    environment:
+      VITE_PESI_API_BASE_URL: ${VITE_PESI_API_BASE_URL:-http://localhost:8000/api/v1}
+      VITE_PESI_API_KEY: ${PESI_API_KEY:-change-me-before-production}
+    ports:
+      - "4173:4173"
+    depends_on:
+      - pesi-api

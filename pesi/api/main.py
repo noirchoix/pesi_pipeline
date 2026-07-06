@@ -1,78 +1,62 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
-from typing import Optional
+from contextlib import asynccontextmanager
+from typing import Any
 
-import pandas as pd
-from fastapi import FastAPI, Query
-from pydantic import BaseModel
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
-app = FastAPI(title="PESI-KG production API", version="0.3.0")
-
-OUTPUT_DIR = Path("outputs")
+from pesi.api.config import get_settings
+from pesi.api.routes import benchmarks, interpretation, results, runs
 
 
-@app.get("/health")
-def health():
-    return {"status": "ok", "service": "PESI-KG production"}
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    settings = get_settings()
+    settings.safe_path(settings.job_dir).mkdir(parents=True, exist_ok=True)
+    yield
 
 
-@app.get("/reports/run-manifest")
-def run_manifest():
-    p = OUTPUT_DIR / "run_manifest.json"
-    if not p.exists():
-        return {"status": "missing", "message": "Run pipeline first."}
-    return json.loads(p.read_text(encoding="utf-8"))
+def create_app() -> FastAPI:
+    settings = get_settings()
+    app = FastAPI(
+        title=settings.app_name,
+        version=settings.app_version,
+        description=(
+            "PESI-KG API for plant enzyme-state KG outputs, run orchestration, "
+            "benchmark gates, intervention results, and artifact-grounded scientific interpretation."
+        ),
+        openapi_url=f"{settings.api_prefix}/openapi.json",
+        docs_url=f"{settings.api_prefix}/docs",
+        redoc_url=f"{settings.api_prefix}/redoc",
+        lifespan=lifespan,
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-API-Key"],
+    )
+    app.include_router(runs.router, prefix=settings.api_prefix)
+    app.include_router(results.router, prefix=settings.api_prefix)
+    app.include_router(benchmarks.router, prefix=settings.api_prefix)
+    app.include_router(interpretation.router, prefix=settings.api_prefix)
+
+    @app.get("/health")
+    def health() -> dict[str, Any]:
+        return {"status": "ok", "service": settings.app_name, "version": settings.app_version, "auth_mode": settings.auth_mode}
+
+    @app.get(f"{settings.api_prefix}/health")
+    def api_health() -> dict[str, Any]:
+        return health()
+
+    @app.exception_handler(ValueError)
+    async def value_error_handler(_request, exc: ValueError):
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+    return app
 
 
-@app.get("/critical-enzymes")
-def critical_enzymes(stage: Optional[str] = Query(None), top_k: int = Query(25, ge=1, le=500)):
-    p = OUTPUT_DIR / "aim3_critical_transition_enzymes.csv"
-    if not p.exists():
-        return {"status": "missing", "rows": []}
-    df = pd.read_csv(p)
-    if stage and "stage_assigned" in df.columns:
-        df = df[df["stage_assigned"].astype(str).str.contains(stage, case=False, na=False)]
-    return {"status": "ok", "rows": df.head(top_k).to_dict("records")}
-
-
-@app.get("/optimized-interventions")
-def optimized_interventions(stage: Optional[str] = Query(None), target: Optional[str] = Query(None), top_k: int = Query(25, ge=1, le=500)):
-    p = OUTPUT_DIR / "aim4_optimized_interventions.csv"
-    if not p.exists():
-        return {"status": "missing", "rows": []}
-    df = pd.read_csv(p)
-    if stage and "stage" in df.columns:
-        df = df[df["stage"].astype(str).str.contains(stage, case=False, na=False)]
-    if target and "target_enzyme" in df.columns:
-        df = df[df["target_enzyme"].astype(str).str.contains(target, case=False, na=False)]
-    return {"status": "ok", "rows": df.head(top_k).to_dict("records")}
-
-
-@app.get("/pseudo-lab")
-def pseudo_lab(target: Optional[str] = Query(None), top_k: int = Query(100, ge=1, le=1000)):
-    p = OUTPUT_DIR / "pseudo_lab_dose_response.csv"
-    if not p.exists():
-        return {"status": "missing", "rows": []}
-    df = pd.read_csv(p)
-    if target and "target_enzyme" in df.columns:
-        df = df[df["target_enzyme"].astype(str).str.contains(target, case=False, na=False)]
-    return {"status": "ok", "rows": df.head(top_k).to_dict("records")}
-
-
-@app.get("/synergy-groups")
-def synergy_groups(top_k: int = Query(25, ge=1, le=500)):
-    p = OUTPUT_DIR / "aim4_inhibit_synergy_groups.csv"
-    if not p.exists():
-        return {"status": "missing", "rows": []}
-    df = pd.read_csv(p)
-    return {"status": "ok", "rows": df.head(top_k).to_dict("records")}
-
-
-@app.get("/benchmarks")
-def benchmark_report():
-    p = OUTPUT_DIR / "benchmark_report.json"
-    if not p.exists():
-        return {"status": "missing", "message": "Run benchmark first."}
-    return json.loads(p.read_text(encoding="utf-8"))
+app = create_app()
