@@ -31,6 +31,12 @@ class ApiSettings(BaseModel):
     job_dir: Path = Path(".pesi_runs")
     max_table_rows: int = 1000
     default_table_rows: int = 100
+    ai_enabled: bool = False
+    ai_provider: str = "deepseek"
+    deepseek_api_key: str | None = None
+    deepseek_base_url: str = "https://api.deepseek.com/v1"
+    deepseek_model: str = "deepseek-chat"
+    deepseek_timeout_seconds: int = 45
 
     def safe_path(self, value: str | Path) -> Path:
         raw = Path(value)
@@ -81,4 +87,10 @@ def get_settings() -> ApiSettings:
         job_dir=Path(os.getenv("PESI_JOB_DIR", ".pesi_runs")),
         max_table_rows=int(os.getenv("PESI_MAX_TABLE_ROWS", "1000")),
         default_table_rows=int(os.getenv("PESI_DEFAULT_TABLE_ROWS", "100")),
+        ai_enabled=os.getenv("PESI_AI_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"},
+        ai_provider=os.getenv("PESI_AI_PROVIDER", "deepseek"),
+        deepseek_api_key=os.getenv("DEEPSEEK_API_KEY", "").strip() or None,
+        deepseek_base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
+        deepseek_model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+        deepseek_timeout_seconds=int(os.getenv("DEEPSEEK_TIMEOUT_SECONDS", "45")),
     )

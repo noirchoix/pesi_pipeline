@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from pesi.api.config import get_settings
-from pesi.api.routes import benchmarks, interpretation, results, runs
+from pesi.api.routes import benchmarks, inference, interpretation, results, runs
 
 
 @asynccontextmanager
@@ -43,6 +43,7 @@ def create_app() -> FastAPI:
     app.include_router(results.router, prefix=settings.api_prefix)
     app.include_router(benchmarks.router, prefix=settings.api_prefix)
     app.include_router(interpretation.router, prefix=settings.api_prefix)
+    app.include_router(inference.router, prefix=settings.api_prefix)
 
     @app.get("/health")
     def health() -> dict[str, Any]:
