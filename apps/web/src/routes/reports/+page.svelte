@@ -77,6 +77,13 @@
         <span class="eyebrow">Research-use report</span>
         <h1>{report.title}</h1>
         <p class="lede">{report.intro}</p>
+        {#if report.interpretation_mode}
+          <div class="interpretation-mode" aria-label="Report interpretation method">
+            <strong>Interpretation method</strong>
+            <span>{report.interpretation_mode.label}</span>
+            {#if report.interpretation_mode.model}<small>{report.interpretation_mode.model}</small>{/if}
+          </div>
+        {/if}
       </div>
       {#each report.sections as section}
         <article class="report-section"><h3>{section.title}</h3><p>{section.body}</p></article>
@@ -86,8 +93,22 @@
 
     <section class="grid two section">
       <div class="stack">
-        <h2>Included candidate pairs</h2>
-        {#each report.recommendations.slice(0, 4) as item}<ResultRecommendationCard {item} />{/each}
+        <h2>Grouped candidate pairs</h2>
+        {#if report.pair_groups?.length}
+          {#each report.pair_groups.slice(0, 5) as group}
+            <article class="report-pair">
+              <div class="between compact-row">
+                <h3>{group.pair_label}</h3>
+                <span class="status-chip">{group.evidence_strength}</span>
+              </div>
+              <p><strong>Targets:</strong> {group.targets.map((target) => target.target).join(', ')}</p>
+              <p>{group.natural_source_context.interpretation}</p>
+              <p><strong>Assay priority:</strong> {group.assay_prioritization.overall_priority}</p>
+            </article>
+          {/each}
+        {:else}
+          {#each report.recommendations.slice(0, 4) as item}<ResultRecommendationCard {item} />{/each}
+        {/if}
       </div>
       <div class="stack">
         <h2>Included targets</h2>
@@ -96,3 +117,55 @@
     </section>
   {/if}
 </div>
+
+
+<style>
+  .interpretation-mode {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.45rem;
+    margin-top: 0.75rem;
+    padding: 0.45rem 0.7rem;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--surface-soft, #f6faf7);
+    font-size: 0.86rem;
+  }
+
+  .interpretation-mode span,
+  .interpretation-mode small {
+    color: var(--muted);
+  }
+
+  .report-pair {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+    padding: 1rem;
+  }
+
+  .report-pair h3 {
+    margin: 0;
+  }
+
+  .report-pair p {
+    margin: 0.55rem 0 0;
+  }
+
+  .compact-row {
+    gap: 0.75rem;
+    align-items: flex-start;
+  }
+
+  .status-chip {
+    flex: 0 0 auto;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 0.25rem 0.55rem;
+    font-size: 0.78rem;
+    font-weight: 750;
+    color: var(--accent);
+    background: var(--accent-soft);
+  }
+</style>

@@ -292,17 +292,69 @@ export type Explanation = {
   enzyme_state_reasoning?: EnzymeStateReasoning;
 };
 
+export type ReportInterpretationMode = {
+  source: string;
+  status: string;
+  label: string;
+  model?: string | null;
+};
+
+export type ReportPairGroup = {
+  pair_id: string;
+  compound_a: string;
+  compound_b: string;
+  pair_label: string;
+  evidence_strength: string;
+  chemical_class?: string | null;
+  target_count: number;
+  targets: Array<{
+    target: string;
+    target_family?: string | null;
+    growth_stage?: string | null;
+    evidence_strength?: string | null;
+    enzyme_state_interpretation?: string;
+    scenario_selectivity_interpretation?: string;
+    pathway_context?: Array<Record<string, unknown>>;
+    pairing_interpretation?: string;
+    assay_priority?: Record<string, unknown>;
+    validation_required?: string;
+  }>;
+  natural_source_context: {
+    status: string;
+    shared_source_count: number;
+    shared_source_names: string[];
+    interpretation: string;
+    compound_a: Record<string, unknown>;
+    compound_b: Record<string, unknown>;
+    caveat: string;
+  };
+  evidence_provenance: Array<Record<string, unknown>>;
+  confidence: Record<string, unknown>;
+  assay_prioritization: {
+    overall_priority: string;
+    target_bands: Array<Record<string, unknown>>;
+  };
+};
+
 export type ReadableReport = {
   status: string;
   report_type: string;
   title: string;
   intro: string;
+  interpretation_mode?: ReportInterpretationMode;
+  executive_summary?: {
+    body?: string;
+    key_findings?: string[];
+    scenario_interpretation?: string;
+  };
   sections: ExplanationSection[];
+  pair_groups?: ReportPairGroup[];
   recommendations: Recommendation[];
   targets: TargetInsight[];
   recommendation_evidence?: RecommendationEvidence[];
   target_state_reasoning?: EnzymeStateReasoning[];
   food_source_mapping?: Record<string, unknown>;
+  technical_appendix?: Record<string, unknown>;
   caveats: string[];
 };
 

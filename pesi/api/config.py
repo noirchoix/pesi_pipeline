@@ -14,10 +14,10 @@ class ApiSettings(BaseModel):
     api_prefix: str = "/api/v1"
     project_root: Path = Field(default_factory=lambda: Path.cwd())
     default_raw_dir: str = "raw"
-    default_out_dir: str = "outputs"
-    default_artifact_dir: str = "artifacts"
-    fallback_out_dir: str = "outputs_medium"
-    fallback_artifact_dir: str = "artifacts_medium"
+    default_out_dir: str = "outputs_medium"
+    default_artifact_dir: str = "artifacts_medium"
+    fallback_out_dir: str = "outputs"
+    fallback_artifact_dir: str = "artifacts"
     allowed_profiles: tuple[str, ...] = ("audit", "medium", "large", "full")
     allowed_sabio_modes: tuple[str, ...] = ("offline", "cache")
     api_key: str | None = None
@@ -79,17 +79,17 @@ def get_settings() -> ApiSettings:
         app_version=os.getenv("PESI_API_VERSION", "0.5.0"),
         project_root=Path(os.getenv("PESI_PROJECT_ROOT", ".")).resolve(),
         default_raw_dir=os.getenv("PESI_RAW_DIR", "raw"),
-        default_out_dir=os.getenv("PESI_OUT_DIR", "outputs"),
-        default_artifact_dir=os.getenv("PESI_ARTIFACT_DIR", "artifacts"),
-        fallback_out_dir=os.getenv("PESI_FALLBACK_OUT_DIR", "outputs_medium"),
-        fallback_artifact_dir=os.getenv("PESI_FALLBACK_ARTIFACT_DIR", "artifacts_medium"),
+        default_out_dir=os.getenv("PESI_OUT_DIR", "outputs_medium"),
+        default_artifact_dir=os.getenv("PESI_ARTIFACT_DIR", "artifacts_medium"),
+        fallback_out_dir=os.getenv("PESI_FALLBACK_OUT_DIR", "outputs"),
+        fallback_artifact_dir=os.getenv("PESI_FALLBACK_ARTIFACT_DIR", "artifacts"),
         api_key=api_key,
         auth_mode="required" if auth_mode == "required" else "optional",
         cors_origins=cors or ApiSettings().cors_origins,
         job_dir=Path(os.getenv("PESI_JOB_DIR", ".pesi_runs")),
         max_table_rows=int(os.getenv("PESI_MAX_TABLE_ROWS", "1000")),
         default_table_rows=int(os.getenv("PESI_DEFAULT_TABLE_ROWS", "100")),
-        ai_enabled=os.getenv("PESI_AI_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"},
+        ai_enabled=os.getenv("PESI_AI_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"},
         ai_provider=os.getenv("PESI_AI_PROVIDER", "deepseek"),
         deepseek_api_key=os.getenv("DEEPSEEK_API_KEY", "").strip() or None,
         deepseek_base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),

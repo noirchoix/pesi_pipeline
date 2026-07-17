@@ -63,15 +63,25 @@ class ArtifactReader:
     def artifact_dir(self, value: str | Path | None = None) -> Path:
         return self.settings.resolve_artifact_dir(value)
 
+    def _output_file(self, filename: str, out_dir: str | Path | None = None) -> Path:
+        # Run-bound reads must stay isolated to that run. For the unscoped
+        # "latest baseline" view, fall back per artifact so an existing but
+        # stale outputs/ directory cannot hide newer outputs_medium artifacts.
+        primary = self.out_dir(out_dir) / filename
+        if out_dir is not None or primary.exists():
+            return primary
+        fallback = self.settings.safe_path(self.settings.fallback_out_dir) / filename
+        return fallback if fallback.exists() else primary
+
     def json_path(self, key: str, out_dir: str | Path | None = None) -> Path:
         if key not in JSON_MAP:
             raise KeyError(key)
-        return self.out_dir(out_dir) / JSON_MAP[key]
+        return self._output_file(JSON_MAP[key], out_dir)
 
     def csv_path(self, key: str, out_dir: str | Path | None = None) -> Path:
         if key not in CSV_MAP:
             raise KeyError(key)
-        return self.out_dir(out_dir) / CSV_MAP[key]
+        return self._output_file(CSV_MAP[key], out_dir)
 
     def read_json(self, key: str, out_dir: str | Path | None = None) -> dict[str, Any]:
         path = self.json_path(key, out_dir)

@@ -16,29 +16,41 @@
   let strength = '';
 
   $: runId = $page.url.searchParams.get('run') || activeRunId();
-  $: filteredRecommendations = filterRecommendations(data?.recommendations ?? []);
-  $: filteredTargets = filterTargets(data?.targets ?? []);
+  $: filteredRecommendations = filterRecommendations(data?.recommendations ?? [], query, target, stage, strength);
+  $: filteredTargets = filterTargets(data?.targets ?? [], query, target, stage, strength);
 
-  function filterRecommendations(items: Recommendation[]): Recommendation[] {
-    const q = query.trim().toLowerCase();
+  function filterRecommendations(
+    items: Recommendation[],
+    queryValue: string,
+    targetValue: string,
+    stageValue: string,
+    strengthValue: string
+  ): Recommendation[] {
+    const q = queryValue.trim().toLowerCase();
     return items.filter((item) => {
       const hay = `${item.compound_a} ${item.compound_b} ${item.target} ${item.target_family} ${item.stage} ${item.chemical_class} ${item.evidence_strength}`.toLowerCase();
       if (q && !hay.includes(q)) return false;
-      if (target && item.target !== target && item.target_family !== target) return false;
-      if (stage && item.stage !== stage) return false;
-      if (strength && item.evidence_strength !== strength) return false;
+      if (targetValue && item.target !== targetValue && item.target_family !== targetValue) return false;
+      if (stageValue && item.stage !== stageValue) return false;
+      if (strengthValue && item.evidence_strength !== strengthValue) return false;
       return true;
     });
   }
 
-  function filterTargets(items: TargetInsight[]): TargetInsight[] {
-    const q = query.trim().toLowerCase();
+  function filterTargets(
+    items: TargetInsight[],
+    queryValue: string,
+    targetValue: string,
+    stageValue: string,
+    strengthValue: string
+  ): TargetInsight[] {
+    const q = queryValue.trim().toLowerCase();
     return items.filter((item) => {
       const hay = `${item.name} ${item.family} ${item.stage} ${item.priority}`.toLowerCase();
       if (q && !hay.includes(q)) return false;
-      if (target && item.name !== target && item.family !== target) return false;
-      if (stage && item.stage !== stage) return false;
-      if (strength && item.priority !== strength) return false;
+      if (targetValue && item.name !== targetValue && item.family !== targetValue) return false;
+      if (stageValue && item.stage !== stageValue) return false;
+      if (strengthValue && item.priority !== strengthValue) return false;
       return true;
     });
   }

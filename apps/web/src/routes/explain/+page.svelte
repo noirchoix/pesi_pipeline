@@ -63,7 +63,7 @@
   {#if error}<div class="error">{error}</div>{/if}
 
   <section class="panel stack">
-    <div class="grid three">
+    <div class="explain-controls">
       <label class="field"><span>Explain</span><select bind:value={kind}><option value="recommendation">Candidate pair</option><option value="target">Enzyme target</option></select></label>
       <label class="field"><span>{kind === 'target' ? 'Target' : 'Candidate pair'}</span>
         <select bind:value={row}>
@@ -74,7 +74,7 @@
           {/if}
         </select>
       </label>
-      <div class="field"><span>&nbsp;</span><button class="primary" disabled={explaining || loading} on:click={explain}>{explaining ? 'Explaining…' : 'Explain selection'}</button></div>
+      <div class="action-field"><button class="primary" disabled={explaining || loading} on:click={explain}>{explaining ? 'Explaining…' : 'Explain selection'}</button></div>
     </div>
   </section>
 
@@ -92,3 +92,55 @@
     <ExplanationPanel {explanation} />
   </section>
 </div>
+
+
+<style>
+  .explain-controls {
+    display: grid;
+    grid-template-columns: minmax(170px, 0.6fr) minmax(280px, 1.4fr) max-content;
+    gap: 0.75rem;
+    align-items: end;
+    min-width: 0;
+  }
+
+  .explain-controls :global(.field),
+  .explain-controls :global(select) {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .explain-controls :global(select) {
+    text-overflow: ellipsis;
+  }
+
+  .action-field {
+    display: flex;
+    align-items: flex-end;
+    min-width: 0;
+  }
+
+  .action-field button {
+    width: 100%;
+    white-space: nowrap;
+  }
+
+  @media (max-width: 980px) {
+    .explain-controls {
+      grid-template-columns: minmax(160px, 0.7fr) minmax(0, 1.3fr);
+    }
+
+    .action-field {
+      grid-column: 1 / -1;
+    }
+  }
+
+  @media (max-width: 680px) {
+    .explain-controls {
+      grid-template-columns: 1fr;
+    }
+
+    .action-field {
+      grid-column: auto;
+    }
+  }
+</style>
