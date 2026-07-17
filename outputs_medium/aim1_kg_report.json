@@ -1,7 +1,7 @@
 {
   "db_path": "artifacts_medium\\pesi_kg.sqlite",
-  "node_count": 22783,
-  "edge_count": 122358,
+  "node_count": 23423,
+  "edge_count": 126197,
   "node_type_counts": {
     "Reaction": 6023,
     "Compound": 4457,
@@ -11,12 +11,14 @@
     "EnzymeName": 1837,
     "Organism": 1403,
     "PlantSpecies": 487,
+    "FoodSource": 412,
     "Interaction": 402,
+    "FoodDBCompound": 228,
     "DataNode": 173,
     "InhibitorClass": 30,
     "EnzymeFamily": 14,
-    "HerbicideTarget": 12,
     "SiteOfAction": 12,
+    "HerbicideTarget": 12,
     "DevelopmentStage": 7,
     "CAZyFamily": 6,
     "External": 1
@@ -24,13 +26,15 @@
   "edge_relation_counts_top25": {
     "catalyzes_or_maps_to_reaction": 69927,
     "participates_in_pathway": 22094,
-    "has_curated_enzyme": 15652,
+    "has_curated_enzyme": 15140,
     "belongs_to_family": 10530,
+    "reported_in_food": 4103,
     "has_kinetic_substrate": 590,
     "annotated_as_ec": 549,
     "maps_to_rhea": 507,
     "encodes_cazy_family": 438,
     "is_part_of": 431,
+    "normalized_to_fooddb_compound": 248,
     "participants": 213,
     "is_about": 199,
     "target": 96,
@@ -41,12 +45,10 @@
     "has_site_of_action": 12,
     "acts_in_pathway": 12,
     "foaf:page": 6,
-    "dcterms:source": 3,
     "pav:derivedFrom": 3,
-    "dcterms:issued": 3,
-    "dcterms:modified": 3,
+    "dcterms:source": 3,
     "dcterms:publisher": 3,
-    "dcat:distribution": 3
+    "dcterms:modified": 3
   },
   "source_table_counts": {
     "skid_kinetics": 30577,
@@ -69,8 +71,18 @@
     "enzymeflow_pdb_assets": 100,
     "reactzyme_manifest": 26,
     "sabio_cache": 6000,
-    "stage_anchors": 13
+    "stage_anchors": 13,
+    "fooddb_compound_matches": 400,
+    "fooddb_food_sources": 4400,
+    "fooddb_pair_source_context": 293
   },
   "aim_1_status": "implemented_with_typed_kg_and_source_provenance",
-  "evidence_policy": "No silent proxies: proxy/assumption/hypothesis/model inference are explicitly labeled in downstream outputs."
+  "evidence_policy": "No silent proxies: proxy/assumption/hypothesis/model inference are explicitly labeled in downstream outputs.",
+  "food_source_extension": {
+    "status": "integrated",
+    "compound_match_table": "fooddb_compound_matches",
+    "food_occurrence_table": "fooddb_food_sources",
+    "pair_source_table": "fooddb_pair_source_context",
+    "scientific_boundary": "Food/source occurrence is contextual evidence only. It does not establish extractability, dose, efficacy, crop safety, formulation suitability, or field-use readiness."
+  }
 }

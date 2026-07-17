@@ -50,7 +50,10 @@ apps/web/node_modules/
 apps/web/.svelte-kit/
 apps/web/build/
 apps/web/.vite/
-apps/web/**/*.svelte
 
 # PESI run state
 .pesi_runs/
+outputs/
+outputs_medium/
+artifacts/
+artifacts_medium/

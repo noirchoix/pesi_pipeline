@@ -1,68 +1,118 @@
 # PESI-KG Production Research Platform
 
-**PESI-KG** = Plant Enzyme-State Intervention Knowledge Graph.
+**PESI-KG** is a computational plant-enzymology platform for selective enzyme-state intervention research. It combines a typed knowledge graph, enzyme-state signatures, critical-transition target ranking, natural/inhibitor-like compound-pair screening, scenario selectivity, evidence-path reconstruction, and artifact-grounded scientific interpretation.
 
-This repository is the locked production research baseline plus application layer for:
+Current application version: **0.5.0**.
+
+## Scientific boundary
+
+PESI generates **computational hypotheses and screening priorities**. It does not establish pesticide efficacy, formulation suitability, application rate, crop safety, extractability from a food source, environmental safety, or regulatory readiness. All candidate pairs require target-specific biochemical assays, comparative crop/weed testing, toxicity review, environmental validation, and regulatory assessment.
+
+Food/source occurrence is contextual evidence only. A reported compound occurrence in a food or ingredient does not establish useful concentration, extraction feasibility, intervention efficacy, or field-use suitability.
+
+## Product workflow
+
+The application is organized around the researcher’s task rather than backend implementation labels:
 
 ```text
-Computational Plant Enzymology for Selective Enzyme-State Intervention
+New analysis
+→ friendly run progress
+→ recommendations and target insights
+→ evidence path and natural-source context
+→ DeepSeek-backed or deterministic grounded explanation
+→ readable scientific report
+→ developer diagnostics
 ```
 
-The flagship use case is herbicide-biology-aware computational prioritization of naturally derived or inhibitor-like compound combinations against critical plant enzyme-state transitions.
+The main UI exposes:
 
-## Scientific status and safety boundary
-
-This system generates **computational hypotheses** and ranked intervention candidates.
-
-It does **not** claim wet-lab pesticide efficacy. It does **not** provide field-use, formulation, dosing, application, or regulatory recommendations. All Aim 4 outputs require experimental validation, toxicity review, crop-safety testing, environmental persistence assessment, and regulatory review before any real-world use.
-
-## Locked validation baseline
-
-The current backend passed both audit and medium production gates.
-
-| Profile | Gates | Key Aim 4 portfolio metrics |
-| --- | ---: | --- |
-| audit | 7/7 | 1000 rows, 41 targets, 72 compounds, 298 unique pairs, max compound share 0.09 |
-| medium | 7/7 | 1000 rows, 43 targets, 65 compounds, 292 unique pairs, max compound share 0.09 |
-
-Medium profile used expanded source bounds: UniProt 10,000, CAZy 25,000, PlantMet edges 50,000, PlantCyc triples 50,000, enzyme-SMI pairs 33,739, and SABIO cache 6,000.
+- Crop, weed, growth-stage, and analysis-goal setup.
+- Run-bound recommendation and target results.
+- Enzyme-state reasoning and scenario-selectivity interpretation.
+- Pairing/synergy rationale translated into user-facing language.
+- Compound-pool intelligence, proxy assumptions, and scientific limitations.
+- FoodDB-derived compound-to-food occurrence context.
+- Recommendation evidence paths from compound pair to target, family, pathway, stage, inhibitor class, and source evidence.
+- Assay-prioritization simulation bands explicitly separated from dose or application guidance.
+- JSON and HTML scientific reports.
+- Separate diagnostics for raw artifacts, benchmark gates, mapping tables, and logs.
 
 ## Implemented research modules
 
-- Aim 1: typed plant enzyme-state KG with source provenance.
-- Aim 2: enzyme-state signature evaluation versus family and target-class baselines.
-- Aim 3: critical transition enzyme ranking with strict high-confidence known-target enrichment.
-- Aim 4: chemically credible inhibitor-combination optimization.
-- Herbicide target atlas and site-of-action annotations.
-- Phytochemical/chemical-class annotation and diversity constraints.
-- Typed inhibit-synergy graph.
-- Scenario selectivity layer for crop-vs-weed context.
-- Production benchmark gates and leaderboard.
-- FastAPI run orchestration and result API.
-- SvelteKit research console UI.
-- Artifact-grounded interpretation and HTML/JSON report generation.
+- Typed plant enzyme-state knowledge graph with source provenance.
+- Enzyme-state signature evaluation against family/target baselines.
+- Critical-transition enzyme ranking with herbicide-target priors.
+- Chemically constrained compound-pair optimization.
+- Herbicide target atlas and site-of-action context.
+- Phytochemical classification and portfolio diversity controls.
+- Typed inhibit-synergy groups.
+- Crop-versus-weed scenario selectivity.
+- Compound-pool screening intelligence and explicit proxy registers.
+- Pseudo-lab response simulation for assay prioritization only.
+- FoodDB-derived compound normalization and food/ingredient occurrence mapping.
+- Pair-level shared and individual natural-source context.
+- Evidence-path API and evidence-aware report generation.
+- FastAPI orchestration and SvelteKit inference UI.
+- Optional server-side DeepSeek interpretation with deterministic artifact-grounded fallback.
+
+## Food chemistry data layout
+
+Place the extracted food chemistry bundle at:
+
+```text
+raw/food_chemistry/
+  staging/fooddb.duckdb
+  curated/v1/*.parquet
+```
+
+The loader also supports legacy layouts under `raw/fooddb/` and discovers nested `fooddb.duckdb` files when necessary.
+
+Generate or refresh FoodDB mapping artifacts independently:
+
+```bash
+python -m pesi.cli.main map-food-sources \
+  --raw raw \
+  --out outputs_medium \
+  --artifact artifacts_medium \
+  --top-n-per-compound 30
+```
+
+Generated outputs:
+
+```text
+compound_fooddb_matches.csv
+compound_food_sources.csv
+pair_food_source_context.csv
+pair_food_source_evidence.csv
+food_source_mapping_report.json
+```
+
+The current packaged medium artifacts map 248 of 400 compound-pool records and 40 of 65 compounds used in the recommendation portfolio. Thirty pair records have at least one shared FoodDB food-source context. Unmatched compounds remain explicit; no source claim is inferred from chemical class alone.
 
 ## Backend quick start
 
 ```bash
 python -m pip install -e .
-python -m pesi.cli.main bootstrap --source-dir /path/to/Downloads --raw raw --force
-python -m pesi.cli.main fetch-sabio \
+python -m pesi.cli.main run-all \
   --raw raw \
-  --queries "ParameterType:Ki" \
-  --queries "ParameterType:Km" \
-  --queries "ParameterType:kcat" \
-  --page-size 200 \
-  --max-pages 10
-python -m pesi.cli.main run-all --raw raw --out outputs --artifact artifacts --sabio-mode cache --profile audit
+  --out outputs \
+  --artifact artifacts \
+  --sabio-mode cache \
+  --profile audit
 python -m pesi.cli.main benchmark --out outputs --artifact artifacts
+```
+
+Food-source mapping runs automatically after compound-pair optimization when the food chemistry bundle is available. Configure retained food-source records with:
+
+```env
+PESI_FOOD_SOURCE_TOP_N=30
 ```
 
 ## API server
 
 ```bash
-export PESI_API_KEY="change-me-before-production"
-export PESI_AUTH_MODE=required
+cp .env.example .env
+# Set a private PESI_API_KEY before shared deployment.
 uvicorn pesi.api.main:app --host 0.0.0.0 --port 8000
 ```
 
@@ -72,113 +122,98 @@ API documentation:
 http://localhost:8000/api/v1/docs
 ```
 
-Core endpoints:
+Primary inference endpoints:
 
 ```text
-POST   /api/v1/runs
-GET    /api/v1/runs
-GET    /api/v1/runs/{run_id}
-GET    /api/v1/runs/{run_id}/logs
-GET    /api/v1/runs/{run_id}/artifacts
+GET    /api/v1/inference/options
+POST   /api/v1/inference/analyses
+GET    /api/v1/inference/analyses/{run_id}/progress
+GET    /api/v1/inference/results
+POST   /api/v1/inference/explain/recommendation
+POST   /api/v1/inference/explain/target
+POST   /api/v1/inference/reports
 
-GET    /api/v1/results/kg-summary
-GET    /api/v1/results/aim2
-GET    /api/v1/results/aim2-signatures
-GET    /api/v1/results/aim3
-GET    /api/v1/results/aim4
-GET    /api/v1/results/synergy
-GET    /api/v1/results/scenario-selectivity
-GET    /api/v1/results/compound-pool
-
-GET    /api/v1/benchmarks/summary
-GET    /api/v1/benchmarks/leaderboard
-GET    /api/v1/benchmarks/gates
-GET    /api/v1/benchmarks/report
-
-POST   /api/v1/interpret/run
-POST   /api/v1/interpret/intervention
-POST   /api/v1/interpret/target
-POST   /api/v1/interpret/synergy-group
-POST   /api/v1/reports
-GET    /api/v1/reports/{report_id}.html
+GET    /api/v1/inference/recommendations/{recommendation_id}/evidence-path
+GET    /api/v1/inference/targets/{target_id}/state-reasoning
+GET    /api/v1/inference/food-sources/compound
+GET    /api/v1/inference/food-sources/pair
 ```
 
-Example run request:
+Diagnostics/raw-result endpoints include:
 
-```json
-{
-  "profile": "audit",
-  "sabio_mode": "cache",
-  "raw_dir": "raw",
-  "out_dir": "outputs",
-  "artifact_dir": "artifacts",
-  "scenario": {
-    "crop_taxa": ["Zea mays"],
-    "weed_taxa": ["Amaranthus palmeri"],
-    "growth_stage": "seedling_emergence"
-  }
-}
+```text
+GET /api/v1/results/food-source-report
+GET /api/v1/results/fooddb-matches
+GET /api/v1/results/food-sources
+GET /api/v1/results/pair-food-context
+GET /api/v1/results/pair-food-evidence
+GET /api/v1/results/proxy-evidence
+GET /api/v1/results/pseudo-lab
 ```
 
-## SvelteKit research console
+## SvelteKit application
 
 ```bash
 cd apps/web
-npm install
+npm ci
 cp .env.example .env
+npm run check
 npm run dev
 ```
 
-Open:
+Open `http://localhost:5173`.
 
-```text
-http://localhost:5173
+The browser uses a same-origin SvelteKit proxy at `/api/pesi/*`; the proxy forwards requests to FastAPI server-side. Model-provider secrets are never placed in `VITE_*` variables.
+
+## Optional DeepSeek interpretation
+
+DeepSeek is server-side only:
+
+```env
+PESI_AI_ENABLED=true
+PESI_AI_PROVIDER=deepseek
+DEEPSEEK_API_KEY=your_private_key
+DEEPSEEK_MODEL=deepseek-chat
+DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
 ```
 
-The UI includes:
+When unavailable or disabled, the system returns a deterministic explanation assembled from the same evidence artifacts. The AI provider is not allowed to invent evidence beyond the supplied payload.
 
-- Dashboard with production gates and portfolio metrics.
-- Run launcher and live run-log monitor.
-- KG source and node/edge summary.
-- Aim 2 signature explorer.
-- Aim 3 critical-target explorer.
-- Aim 4 intervention cards with expandable scientific evidence.
-- Synergy-group explorer.
-- Scenario selectivity screen.
-- Benchmark gate page.
-- Artifact-grounded report page.
+## Validation
 
-## Docker Compose
+Validated in this package:
+
+```text
+Python compile check: passed
+Pytest: 20 passed
+Svelte check: 0 errors, 0 warnings
+Svelte production build: passed
+FoodDB KG augmentation: idempotency tested
+```
+
+Audit and medium computational portfolio gates remain part of diagnostics and benchmark evidence; passing them does not imply biological efficacy.
+
+## Deployment
 
 ```bash
 cp .env.example .env
-# edit PESI_API_KEY before production
- docker compose up --build
+docker compose up --build
 ```
 
-API: `http://localhost:8000/api/v1/docs`
-Web: `http://localhost:4173`
+For shared/public deployments:
 
-## Authentication and deployment
+- Keep `PESI_AUTH_MODE=required`.
+- Keep DeepSeek and other provider keys server-side.
+- Use the SvelteKit same-origin proxy or a trusted gateway/session layer.
+- Mount raw data, outputs, artifacts, and `.pesi_runs` as persistent volumes.
+- Apply tenant/user authorization before exposing run artifacts in multi-user environments.
 
-- Set `PESI_API_KEY` and `PESI_AUTH_MODE=required` for shared deployments.
-- The UI sends `VITE_PESI_API_KEY` to the API; use this only for internal/private deployments.
-- For public multi-user deployments, place the SvelteKit app behind a server-side session/auth provider and proxy API requests server-side rather than exposing API keys to browsers.
-- Keep raw data, outputs, artifacts, and `.pesi_runs` mounted as persistent volumes.
+## Documentation
 
-## Evidence policy
-
-Outputs explicitly label proxy assumptions, model inference, rule-based evidence, and assay-validation requirements. The interpretation layer reads only generated run artifacts and reference tables before producing structured JSON/HTML.
-
-## Git baseline lock
-
-Recommended local lock commands:
-
-```bash
-git status
-git add .
-git commit -m "Lock PESI-KG production research baseline with audit and medium gate pass"
-git tag v0.3.0-production-research-baseline
-```
-
-The application version is `0.4.0` because it adds FastAPI/SvelteKit/reporting around the locked `v0.3.0` research baseline.
+- `docs/FOOD_SOURCE_MAPPING.md`
+- `docs/EVIDENCE_PATHS.md`
+- `docs/CHANGELOG_FOOD_EVIDENCE_V4.md`
+- `docs/FILE_CHANGES_V4.md`
+- `DATA_CARD.md`
+- `MODEL_CARD.md`
+- `BENCHMARK_CARD.md`

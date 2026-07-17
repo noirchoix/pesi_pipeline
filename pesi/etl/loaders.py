@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from pesi.core.utils import ensure_dir, normalize_columns, open_maybe_gzip, split_semicolon, to_number, write_json
+from pesi.etl.fooddb_loader import discover_food_chemistry
 
 PLANT_KINGDOM_MARKERS = ["viridiplantae", "streptophyta", "embryophyta", "tracheophyta", "magnoliopsida", "liliopsida"]
 
@@ -166,50 +167,61 @@ def load_plantcyc_summary(raw: Path, max_triples: int = 100000) -> tuple[pd.Data
 
 
 def load_fooddb(raw: Path) -> dict[str, pd.DataFrame]:
-    base = raw / "fooddb"
-    # zip extraction creates raw/fooddb/food_chemistry/...
-    candidates = list(base.rglob("curated/v1"))
-    curated = candidates[0] if candidates else None
+    """Load bounded FoodDB-derived chemistry tables from raw/food_chemistry or legacy raw/fooddb layouts."""
+    paths = discover_food_chemistry(raw)
+    curated = paths.curated_dir
     out: dict[str, pd.DataFrame] = {}
-    if curated:
-        for name in ["compound_descriptors", "compound_enzyme_edges", "compound_pathway_edges", "food_compound_edges", "compound_idf"]:
+    if curated and curated.exists():
+        bounded_tables = {
+            "compound_descriptors": 120000,
+            "compound_enzyme_edges": 120000,
+            "compound_pathway_edges": 120000,
+            "food_compound_edges": 50000,
+            "compound_idf": 120000,
+            "compound_health_effect_edges": 120000,
+            "compound_flavor_edges": 120000,
+        }
+        for name, limit in bounded_tables.items():
             p = curated / f"{name}.parquet"
-            if p.exists():
+            if not p.exists():
+                continue
+            try:
                 try:
-                    # Parquet tables such as food_compound_edges can contain millions of rows.
-                    # Read bounded batches for audit/runtime while preserving source row counts in registry reports.
-                    try:
-                        import pyarrow.parquet as pq
-                        pf = pq.ParquetFile(p)
-                        limit = 200000 if name == "food_compound_edges" else 120000
-                        batches = []
-                        total = 0
-                        for batch in pf.iter_batches(batch_size=min(limit, 50000)):
-                            batches.append(batch.to_pandas())
-                            total += batch.num_rows
-                            if total >= limit:
-                                break
-                        df = pd.concat(batches, ignore_index=True).head(limit) if batches else pd.DataFrame()
-                        df.attrs["source_total_rows"] = pf.metadata.num_rows if pf.metadata else None
-                    except Exception:
-                        df = pd.read_parquet(p).head(200000 if name == "food_compound_edges" else 120000)
-                    df = normalize_columns(df)
-                    df["evidence_class"] = "real_evidence"
-                    df["source_resource"] = "FoodDB_curated"
-                    out[name] = df
-                except Exception as e:
-                    out[name] = pd.DataFrame([{"load_error": repr(e), "evidence_class": "unsupported", "source_resource": "FoodDB_curated"}])
-    duckdb_paths = list(base.rglob("fooddb.duckdb"))
-    if duckdb_paths:
+                    import pyarrow.parquet as pq
+                    pf = pq.ParquetFile(p)
+                    batches = []
+                    total = 0
+                    for batch in pf.iter_batches(batch_size=min(limit, 50000)):
+                        batches.append(batch.to_pandas())
+                        total += batch.num_rows
+                        if total >= limit:
+                            break
+                    df = pd.concat(batches, ignore_index=True).head(limit) if batches else pd.DataFrame()
+                    df.attrs["source_total_rows"] = pf.metadata.num_rows if pf.metadata else None
+                except Exception:
+                    df = pd.read_parquet(p).head(limit)
+                df = normalize_columns(df)
+                df["evidence_class"] = "real_evidence"
+                df["source_resource"] = "FoodDB_curated"
+                out[name] = df
+            except Exception as e:
+                out[name] = pd.DataFrame([{"load_error": repr(e), "evidence_class": "unsupported", "source_resource": "FoodDB_curated"}])
+    if paths.duckdb_path and paths.duckdb_path.exists():
         try:
             import duckdb
-            con = duckdb.connect(str(duckdb_paths[0]), read_only=True)
+            con = duckdb.connect(str(paths.duckdb_path), read_only=True)
             tables = con.sql("SHOW TABLES").fetchdf()
             out["duckdb_tables"] = tables
-            # Try known useful tables, but tolerate schema differences.
-            for t in tables.iloc[:, 0].astype(str).head(20):
+            preferred = [
+                "curated_compound_lookup", "curated_food_lookup", "compound_synonym",
+                "compound", "food", "compound_enzyme_edges", "compound_pathway_edges",
+            ]
+            available = set(tables.iloc[:, 0].astype(str))
+            for t in preferred:
+                if t not in available:
+                    continue
                 try:
-                    df = con.sql(f"SELECT * FROM {t} LIMIT 10000").fetchdf()
+                    df = con.sql(f'SELECT * FROM "{t}" LIMIT 10000').fetchdf()
                     df = normalize_columns(df)
                     df["evidence_class"] = "real_evidence"
                     df["source_resource"] = f"FoodDB_duckdb:{t}"
@@ -217,8 +229,15 @@ def load_fooddb(raw: Path) -> dict[str, pd.DataFrame]:
                 except Exception:
                     pass
             con.close()
+            out["inventory"] = pd.DataFrame([{
+                "root": str(paths.root),
+                "duckdb_path": str(paths.duckdb_path),
+                "curated_dir": str(paths.curated_dir) if paths.curated_dir else None,
+                "evidence_class": "real_evidence",
+                "source_resource": "FoodDB-derived food chemistry bundle",
+            }])
         except Exception as e:
-            out["duckdb_error"] = pd.DataFrame([{"load_error": repr(e)}])
+            out["duckdb_error"] = pd.DataFrame([{"load_error": repr(e), "evidence_class": "unsupported"}])
     return out
 
 def load_curated_families(raw: Path) -> pd.DataFrame:

@@ -10,6 +10,7 @@ from typing import Any
 from pesi.api.config import ApiSettings
 from pesi.api.schemas import RunRequest, ScenarioPayload
 from pesi.api.services.artifact_reader import ArtifactReader
+from pesi.api.services.evidence_path_service import EvidencePathService
 from pesi.api.services.job_runner import JobStore, get_job_runner, get_job_store
 from pesi.api.services.llm_client import DeepSeekClient
 
@@ -165,6 +166,7 @@ class InferenceAdapter:
         self.reader = ArtifactReader(settings)
         self.store: JobStore = get_job_store(settings)
         self.llm = DeepSeekClient(settings)
+        self.evidence = EvidencePathService(settings)
 
     def options(self) -> dict[str, Any]:
         return {
@@ -178,6 +180,13 @@ class InferenceAdapter:
                 "growth_stage": "seedling_emergence",
                 "goal": "candidate_pairs",
                 "profile": "audit",
+            },
+            "capabilities": {
+                "food_source_context": (self.settings.resolve_out_dir() / "food_source_mapping_report.json").exists(),
+                "recommendation_evidence_paths": True,
+                "enzyme_state_reasoning": True,
+                "assay_prioritization_simulation": True,
+                "ai_explanations": bool(self.settings.ai_enabled and self.settings.deepseek_api_key),
             },
         }
 
@@ -294,6 +303,62 @@ class InferenceAdapter:
             "cancelled": "The analysis was cancelled.",
         }.get(status, "Analysis status is unknown.")
 
+    def _select_recommendation(self, results: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any] | None:
+        rows = results.get("recommendations", [])
+        if payload.get("row_index") is not None:
+            try:
+                selected = next((r for r in rows if r.get("row_index") == int(payload["row_index"])), None)
+                if selected:
+                    return selected
+            except (TypeError, ValueError):
+                pass
+        if payload.get("recommendation_id"):
+            selected = next((r for r in rows if r.get("id") == payload.get("recommendation_id")), None)
+            if selected:
+                return selected
+        return rows[0] if rows else None
+
+    def _select_target(self, results: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any] | None:
+        rows = results.get("targets", [])
+        if payload.get("row_index") is not None:
+            try:
+                selected = next((r for r in rows if r.get("row_index") == int(payload["row_index"])), None)
+                if selected:
+                    return selected
+            except (TypeError, ValueError):
+                pass
+        if payload.get("target_id"):
+            selected = next((r for r in rows if r.get("id") == payload.get("target_id")), None)
+            if selected:
+                return selected
+        return rows[0] if rows else None
+
+    @staticmethod
+    def _food_summary(row: dict[str, Any]) -> dict[str, Any]:
+        import json as _json
+
+        def parse(value: Any) -> list[dict[str, Any]]:
+            try:
+                parsed = _json.loads(str(value)) if value not in {None, "", "nan"} else []
+                return parsed if isinstance(parsed, list) else []
+            except Exception:
+                return []
+
+        shared = parse(row.get("shared_foods_json"))
+        a_sources = parse(row.get("compound_a_sources_json"))
+        b_sources = parse(row.get("compound_b_sources_json"))
+        return {
+            "status": row.get("source_context_status") or "not_available",
+            "shared_food_count": int(row.get("shared_food_count") or 0),
+            "shared_quantified_food_count": int(row.get("shared_quantified_food_count") or 0),
+            "shared_source_confidence": score(row.get("shared_source_confidence"), 3),
+            "top_shared_sources": [safe_text(x.get("food_name")) for x in shared[:3] if x.get("food_name")],
+            "compound_a_top_sources": [safe_text(x.get("food_name")) for x in a_sources[:3] if x.get("food_name")],
+            "compound_b_top_sources": [safe_text(x.get("food_name")) for x in b_sources[:3] if x.get("food_name")],
+            "evidence_class": row.get("evidence_class"),
+            "caveat": row.get("mapping_caveat") or "Food occurrence is context only and does not establish extractability, dose, efficacy, or field-use suitability.",
+        }
+
     def results(self, run_id: str | None = None, limit: int = 40) -> dict[str, Any]:
         out_dir, artifact_dir, run = self._record_dirs(run_id)
         meta = self._run_meta(run_id)
@@ -301,9 +366,27 @@ class InferenceAdapter:
         aim3 = self.reader.read_table("aim3", out_dir, limit=limit, sort_by="critical_transition_score")
         scenario = self.reader.read_table("scenario-selectivity", out_dir, limit=12, sort_by="scenario_selectivity_margin")
         synergy = self.reader.read_table("synergy", out_dir, limit=12, sort_by="synergy_group_score")
-        recommendations = [self.recommendation_card(r, i) for i, r in enumerate(aim4.get("rows", []))]
+        food_context = self.reader.read_table("pair-food-context", out_dir, limit=1000)
+        food_by_pair: dict[str, dict[str, Any]] = {}
+        for row in food_context.get("rows", []):
+            key = "||".join(sorted([safe_text(row.get("compound_a"), ""), safe_text(row.get("compound_b"), "")]))
+            food_by_pair[key] = self._food_summary(row)
+        recommendations = []
+        for i, row in enumerate(aim4.get("rows", [])):
+            card = self.recommendation_card(row, i)
+            pair_key = "||".join(sorted([card["compound_a"], card["compound_b"]]))
+            card["natural_source_summary"] = food_by_pair.get(pair_key, {
+                "status": "not_available", "shared_food_count": 0, "top_shared_sources": [],
+                "compound_a_top_sources": [], "compound_b_top_sources": [],
+                "caveat": "Food occurrence is context only and does not establish extractability, dose, efficacy, or field-use suitability.",
+            })
+            card["evidence_path_available"] = True
+            recommendations.append(card)
         targets = [self.target_card(r, i) for i, r in enumerate(aim3.get("rows", []))]
+        for target in targets:
+            target["state_reasoning_available"] = True
         scenario_notes = self.scenario_notes(meta.get("scenario") or {}, scenario.get("rows", []), recommendations, targets)
+        food_report = self.reader.read_json("food-source-report", out_dir)
         return {
             "status": "ok" if recommendations or targets else "missing",
             "run": run,
@@ -312,6 +395,12 @@ class InferenceAdapter:
             "targets": targets,
             "scenario_notes": scenario_notes,
             "synergy_notes": [self.synergy_note(r, i) for i, r in enumerate(synergy.get("rows", []))],
+            "food_source_mapping": {
+                "status": food_report.get("status", "missing"),
+                "recommended_match_coverage": food_report.get("recommended_match_coverage"),
+                "pairs_with_shared_sources": food_report.get("pairs_with_shared_sources", 0),
+                "caveat": food_report.get("caveat"),
+            },
             "filters": {
                 "targets": sorted({r["target"] for r in recommendations if r.get("target")}),
                 "target_families": sorted({r["target_family"] for r in recommendations if r.get("target_family")}),
@@ -401,73 +490,156 @@ class InferenceAdapter:
             "note": f"This group is based on {', '.join(readable_list(row.get('match_schema'), 4)) or 'typed inhibition evidence'} and requires assay validation.",
         }
 
+    def recommendation_evidence(self, payload: dict[str, Any]) -> dict[str, Any]:
+        run_id = payload.get("run_id")
+        out_dir, artifact_dir, _run = self._record_dirs(run_id)
+        results = self.results(run_id=run_id, limit=200)
+        chosen = self._select_recommendation(results, payload)
+        if not chosen:
+            return {"status": "missing", "message": "No recommendation was available.", "caveats": CAVEATS}
+        return self.evidence.recommendation_path(
+            chosen,
+            out_dir=out_dir,
+            artifact_dir=artifact_dir,
+            scenario=results.get("scenario") or {},
+        )
+
+    def target_state_reasoning(self, payload: dict[str, Any]) -> dict[str, Any]:
+        run_id = payload.get("run_id")
+        out_dir, _artifact_dir, _run = self._record_dirs(run_id)
+        results = self.results(run_id=run_id, limit=200)
+        chosen = self._select_target(results, payload)
+        if not chosen:
+            return {"status": "missing", "message": "No target was available.", "caveats": CAVEATS}
+        return self.evidence.target_state_reasoning(chosen, out_dir=out_dir)
+
+    def compound_food_sources(self, compound: str, run_id: str | None = None, limit: int = 20) -> dict[str, Any]:
+        out_dir, _artifact_dir, _run = self._record_dirs(run_id)
+        return self.evidence.compound_food_sources(compound, out_dir=out_dir, limit=limit)
+
+    def pair_food_context(self, compound_a: str, compound_b: str, run_id: str | None = None) -> dict[str, Any]:
+        out_dir, _artifact_dir, _run = self._record_dirs(run_id)
+        return self.evidence.pair_food_context(compound_a, compound_b, out_dir=out_dir)
+
     def explain_recommendation(self, payload: dict[str, Any]) -> dict[str, Any]:
         run_id = payload.get("run_id")
         results = self.results(run_id=run_id, limit=100)
-        rows = results.get("recommendations", [])
-        chosen = None
-        if payload.get("row_index") is not None:
-            chosen = next((r for r in rows if r.get("row_index") == int(payload["row_index"])), None)
-        if not chosen and payload.get("recommendation_id"):
-            chosen = next((r for r in rows if r.get("id") == payload.get("recommendation_id")), None)
-        chosen = chosen or (rows[0] if rows else None)
+        chosen = self._select_recommendation(results, payload)
         if not chosen:
             return {"status": "missing", "message": "No recommendation was available to explain.", "caveats": CAVEATS}
-        fallback = self._recommendation_explanation(chosen, ai_source="deterministic_fallback")
+        evidence = self.recommendation_evidence({**payload, "recommendation_id": chosen.get("id")})
+        fallback = self._recommendation_explanation(chosen, evidence, ai_source="deterministic_fallback")
         system = self._system_prompt()
-        user = json.dumps({"task": "Explain one PESI recommendation for a researcher without backend jargon.", "recommendation": chosen, "scenario": results.get("scenario"), "required_caveats": CAVEATS}, indent=2)
-        return self.llm.complete_json(system=system, user=user, fallback=fallback)
+        user = json.dumps({
+            "task": "Explain one PESI recommendation for a researcher without backend jargon.",
+            "recommendation": chosen,
+            "evidence_path": evidence,
+            "scenario": results.get("scenario"),
+            "required_caveats": CAVEATS,
+        }, indent=2)
+        response = self.llm.complete_json(system=system, user=user, fallback=fallback)
+        if isinstance(response, dict):
+            response["evidence_path"] = evidence
+        return response
 
     def explain_target(self, payload: dict[str, Any]) -> dict[str, Any]:
         run_id = payload.get("run_id")
         results = self.results(run_id=run_id, limit=100)
-        rows = results.get("targets", [])
-        chosen = None
-        if payload.get("row_index") is not None:
-            chosen = next((r for r in rows if r.get("row_index") == int(payload["row_index"])), None)
-        if not chosen and payload.get("target_id"):
-            chosen = next((r for r in rows if r.get("id") == payload.get("target_id")), None)
-        chosen = chosen or (rows[0] if rows else None)
+        chosen = self._select_target(results, payload)
         if not chosen:
             return {"status": "missing", "message": "No target was available to explain.", "caveats": CAVEATS}
-        fallback = self._target_explanation(chosen, ai_source="deterministic_fallback")
+        state_reasoning = self.target_state_reasoning({**payload, "target_id": chosen.get("id")})
+        fallback = self._target_explanation(chosen, state_reasoning, ai_source="deterministic_fallback")
         system = self._system_prompt()
-        user = json.dumps({"task": "Explain one PESI target insight for a researcher without backend jargon.", "target": chosen, "scenario": results.get("scenario"), "required_caveats": CAVEATS}, indent=2)
-        return self.llm.complete_json(system=system, user=user, fallback=fallback)
+        user = json.dumps({
+            "task": "Explain one PESI target insight for a researcher without backend jargon.",
+            "target": chosen,
+            "enzyme_state_reasoning": state_reasoning,
+            "scenario": results.get("scenario"),
+            "required_caveats": CAVEATS,
+        }, indent=2)
+        response = self.llm.complete_json(system=system, user=user, fallback=fallback)
+        if isinstance(response, dict):
+            response["enzyme_state_reasoning"] = state_reasoning
+        return response
 
     def _system_prompt(self) -> str:
         return (
             "You explain PESI computational plant-enzyme screening results. "
             "Use only the JSON artifact supplied by the user. Do not invent efficacy, dosage, formulation, field-use, safety, or regulatory claims. "
             "Return JSON with keys: status, title, lead, sections, caveats. sections must be a list of {title, body}. "
+            "Explain target-state relevance, scenario selectivity, pairing logic, natural-source context, confidence limits, and validation needs when supplied. "
+            "Never imply that food occurrence means the food is usable as a treatment or formulation. "
             "Avoid terms like Aim 3, Aim 4, gates, rows, benchmark, objective score, terminal log, and backend."
         )
 
-    def _recommendation_explanation(self, rec: dict[str, Any], ai_source: str) -> dict[str, Any]:
+    def _recommendation_explanation(self, rec: dict[str, Any], evidence: dict[str, Any], ai_source: str) -> dict[str, Any]:
+        state = evidence.get("enzyme_state_reasoning", {})
+        scenario = evidence.get("scenario_selectivity", {})
+        synergy = evidence.get("synergy_reasoning", {})
+        food = evidence.get("natural_source_context", {})
+        confidence = evidence.get("confidence_and_limitations", {})
+        assay = evidence.get("assay_prioritization", {})
+        shared = [x.get("food_name") for x in food.get("shared_sources", [])[:3] if x.get("food_name")]
+        individual_a = [x.get("food_name") for x in food.get("compound_a_sources", [])[:3] if x.get("food_name")]
+        individual_b = [x.get("food_name") for x in food.get("compound_b_sources", [])[:3] if x.get("food_name")]
+        if shared:
+            food_body = f"Both mapped compounds are reported in {', '.join(shared)}. This is occurrence context only and does not establish extractability, useful concentration, efficacy, or safety."
+        elif individual_a or individual_b:
+            parts = []
+            if individual_a:
+                parts.append(f"{rec['compound_a']} is reported in {', '.join(individual_a)}")
+            if individual_b:
+                parts.append(f"{rec['compound_b']} is reported in {', '.join(individual_b)}")
+            food_body = "; ".join(parts) + ". No shared source was established in the mapped records. Food occurrence is contextual evidence only."
+        else:
+            food_body = "No FoodDB source occurrence was resolved for this pair. Absence of a match does not prove absence from foods or plants."
+        assay_body = assay.get("interpretation") if assay.get("status") == "available" else "No assay-priority simulation band was available for this pair."
         return {
             "status": "ok",
             "title": f"{rec['compound_a']} + {rec['compound_b']}",
             "lead": f"This pair is a {rec['evidence_strength'].lower()} for {rec['target']} during {rec['stage'].lower()}.",
             "sections": [
-                {"title": "Why this target matters", "body": rec["biology_note"]},
-                {"title": "Why these compounds were grouped", "body": rec["why_selected"]},
-                {"title": "What the pairing means", "body": rec["pairing_note"]},
+                {"title": "Why this enzyme state matters", "body": state.get("why_state_matters") or rec["biology_note"]},
+                {"title": "Why the scenario changes priority", "body": scenario.get("why_context_changes_priority") or "The crop, weed, and growth-stage context changes comparative screening priority."},
+                {"title": "Why these compounds were grouped", "body": synergy.get("why_paired") or rec["why_selected"]},
+                {"title": "Natural source context", "body": food_body},
+                {"title": "Evidence confidence", "body": f"{confidence.get('overall', 'Evidence combines model inference and source records')}. The ranking explains screening priority; it does not validate efficacy or safety."},
+                {"title": "Assay-prioritization simulation", "body": assay_body},
                 {"title": "What must be validated", "body": rec["validation_note"]},
             ],
-            "caveats": CAVEATS,
+            "caveats": evidence.get("caveats") or CAVEATS,
             "ai_source": ai_source,
             "ai_status": "generated" if ai_source == "deepseek" else "fallback",
         }
 
-    def _target_explanation(self, target: dict[str, Any], ai_source: str) -> dict[str, Any]:
+    def _target_explanation(self, target: dict[str, Any], state: dict[str, Any], ai_source: str) -> dict[str, Any]:
+        trajectory = state.get("trajectory", {})
+        signals = state.get("evidence_signals", {})
+        selectivity = state.get("scenario_selectivity", {})
+        trajectory_body = (
+            f"The modeled transition signal has a relative peak of {trajectory.get('peak')}, curvature of {trajectory.get('curvature')}, "
+            f"and transition position of {trajectory.get('critical_transition_time')}. These are comparative model features, not measured enzyme kinetics."
+        )
+        evidence_body = (
+            f"Pathway essentiality: {signals.get('pathway_essentiality')}; kinetic evidence: {signals.get('kinetic_evidence')}; "
+            f"structure evidence: {signals.get('structure_evidence')}; plant-context evidence: {signals.get('plant_context')}; "
+            f"uncertainty penalty: {signals.get('uncertainty_penalty')}."
+        )
+        selectivity_body = (
+            f"The scenario layer estimates weed vulnerability at {selectivity.get('weed_vulnerability')}, crop vulnerability at {selectivity.get('crop_vulnerability')}, "
+            f"and a comparative margin of {selectivity.get('selectivity_margin')}. These are screening proxies requiring comparative assays."
+        )
         return {
             "status": "ok",
             "title": target["name"],
             "lead": f"This enzyme is a {target['priority'].lower()} target signal in the current screening context.",
             "sections": [
-                {"title": "Biological signal", "body": target["biology_note"]},
-                {"title": "Why it appears in the review list", "body": target["reason"]},
-                {"title": "Evidence boundary", "body": target["support_note"]},
+                {"title": "Why this enzyme state matters", "body": state.get("why_state_matters") or target["biology_note"]},
+                {"title": "Growth-stage signal", "body": trajectory_body},
+                {"title": "Evidence supporting the target", "body": evidence_body},
+                {"title": "Scenario selectivity", "body": selectivity_body},
+                {"title": "Pathway context", "body": target["biology_note"]},
                 {"title": "What must be validated", "body": target["validation_note"]},
             ],
             "caveats": CAVEATS,
@@ -485,12 +657,52 @@ class InferenceAdapter:
         crop = safe_text(scenario.get("crop"), "selected crop")
         weed = safe_text(scenario.get("weed"), "selected weed")
         stage = human_stage(scenario.get("growth_stage")) if scenario.get("growth_stage") else "selected growth stage"
+        recommendation_evidence = [
+            self.recommendation_evidence({"run_id": run_id, "recommendation_id": r.get("id")})
+            for r in recs
+        ]
+        target_reasoning = [
+            self.target_state_reasoning({"run_id": run_id, "target_id": t.get("id")})
+            for t in targets
+        ]
+        source_lines = []
+        confidence_lines = []
+        pathway_lines = []
+        for i, (rec, ev) in enumerate(zip(recs, recommendation_evidence), 1):
+            food = ev.get("natural_source_context", {})
+            shared = [x.get("food_name") for x in food.get("shared_sources", [])[:3] if x.get("food_name")]
+            if shared:
+                source_text = f"shared reported sources: {', '.join(shared)}"
+            elif food.get("compound_a_sources") or food.get("compound_b_sources"):
+                source_text = "individual FoodDB occurrence records were found, but no shared source was established"
+            else:
+                source_text = "no FoodDB source occurrence was resolved"
+            source_lines.append(f"{i}. {rec['compound_a']} + {rec['compound_b']}: {source_text}.")
+            confidence = ev.get("confidence_and_limitations", {})
+            confidence_lines.append(
+                f"{i}. {rec['compound_a']} + {rec['compound_b']}: {confidence.get('overall', 'mixed evidence')}; "
+                f"direct sources={len(confidence.get('direct_evidence', []))}, model layers={len(confidence.get('model_inference', []))}, "
+                f"proxy layers={len(confidence.get('proxy_assumptions', []))}."
+            )
+            contexts = ev.get("pathway_context", [])
+            if contexts:
+                pathway_lines.append(f"{i}. {rec['target']}: {contexts[0].get('pathway', 'pathway context not resolved')} — {contexts[0].get('site_of_action', '')}".strip(" —"))
+        state_lines = []
+        for i, state in enumerate(target_reasoning, 1):
+            signals = state.get("evidence_signals", {})
+            state_lines.append(
+                f"{i}. {state.get('target')}: {state.get('why_state_matters')} "
+                f"Pathway essentiality={signals.get('pathway_essentiality')}; uncertainty penalty={signals.get('uncertainty_penalty')}."
+            )
         sections = [
-            {"title": "Scenario analyzed", "body": f"Crop context: {crop}. Weed context: {weed}. Growth stage: {stage}."},
+            {"title": "Scenario analyzed", "body": f"Crop context: {crop}. Weed context: {weed}. Growth stage: {stage}. Scenario values are comparative screening context, not measured crop-safety or weed-control outcomes."},
             {"title": "Candidate-pair summary", "body": "\n".join(f"{i+1}. {r['compound_a']} + {r['compound_b']} for {r['target']} — {r['evidence_strength'].lower()}." for i, r in enumerate(recs)) or "No candidate pairs were available."},
-            {"title": "Target summary", "body": "\n".join(f"{i+1}. {t['name']} — {t['priority'].lower()} during {t['stage'].lower()}." for i, t in enumerate(targets)) or "No target signals were available."},
-            {"title": "Interpretation", "body": "Use the candidate list to prioritize enzyme assays and crop/weed comparative tests. The report does not establish field efficacy or product readiness."},
-            {"title": "Required validation", "body": "Confirm target effect, dose-response behavior, crop tolerance, weed response, toxicity, and environmental persistence before any practical development decision."},
+            {"title": "Enzyme-state reasoning", "body": "\n".join(state_lines) or "No enzyme-state reasoning was available."},
+            {"title": "Pathway and target context", "body": "\n".join(pathway_lines) or "No pathway context was directly resolved for the included candidates."},
+            {"title": "Natural source context", "body": ("\n".join(source_lines) or "No food/source context was available.") + "\n\nFood occurrence is contextual evidence only. It does not establish extractability, useful concentration, efficacy, crop safety, or formulation suitability."},
+            {"title": "Evidence confidence and limitations", "body": "\n".join(confidence_lines) or "No confidence-layer summary was available."},
+            {"title": "Assay prioritization", "body": "Pseudo-lab outputs are used only to suggest relative assay-priority bands for controlled experiments. They are not doses, field rates, or formulation recommendations."},
+            {"title": "Required validation", "body": "Confirm target engagement, pair interaction, dose-response behavior, crop tolerance, weed response, toxicity, environmental persistence, and source extractability before any practical development decision."},
         ]
         return {
             "status": "ok",
@@ -500,7 +712,10 @@ class InferenceAdapter:
             "sections": sections,
             "recommendations": recs,
             "targets": targets,
-            "caveats": CAVEATS,
+            "recommendation_evidence": recommendation_evidence,
+            "target_state_reasoning": target_reasoning,
+            "food_source_mapping": results.get("food_source_mapping", {}),
+            "caveats": CAVEATS + ["Food/source occurrence does not imply that a food or ingredient is suitable for direct use, extraction, formulation, or application."],
         }
 
     def build_report_html(self, payload: dict[str, Any]) -> str:
@@ -510,4 +725,4 @@ class InferenceAdapter:
             return html.escape(safe_text(x, ""))
         sections = "".join(f"<section><h2>{esc(s['title'])}</h2><p>{esc(s['body']).replace(chr(10), '<br>')}</p></section>" for s in report["sections"])
         caveats = "".join(f"<li>{esc(c)}</li>" for c in report["caveats"])
-        return f"""<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{esc(report['title'])}</title><style>body{{margin:0;background:#f6f7f3;color:#18211c;font-family:system-ui,-apple-system,Segoe UI,sans-serif;line-height:1.6}}main{{max-width:880px;margin:0 auto;padding:48px 24px}}section{{background:#fff;border:1px solid #dfe5dd;border-radius:18px;padding:18px;margin:16px 0}}h1{{font-size:2rem;line-height:1.1}}p{{white-space:normal;color:#45524a}}.notice{{background:#fff9ea;border-color:#ead6a7}}</style></head><body><main><p><strong>PESI research-use report</strong></p><h1>{esc(report['title'])}</h1><p>{esc(report['intro'])}</p>{sections}<section class=\"notice\"><h2>Research-use caveats</h2><ul>{caveats}</ul></section></main></body></html>"""
+        return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{esc(report['title'])}</title><style>body{{margin:0;background:#f6f7f3;color:#18211c;font-family:system-ui,-apple-system,Segoe UI,sans-serif;line-height:1.6}}main{{max-width:880px;margin:0 auto;padding:48px 24px}}section{{background:#fff;border:1px solid #dfe5dd;border-radius:18px;padding:18px;margin:16px 0}}h1{{font-size:2rem;line-height:1.1}}p{{white-space:normal;color:#45524a}}.notice{{background:#fff9ea;border-color:#ead6a7}}</style></head><body><main><p><strong>PESI research-use report</strong></p><h1>{esc(report['title'])}</h1><p>{esc(report['intro'])}</p>{sections}<section class="notice"><h2>Research-use caveats</h2><ul>{caveats}</ul></section></main></body></html>"""

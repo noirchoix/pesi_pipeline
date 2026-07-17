@@ -51,3 +51,38 @@ def scenario_selectivity(_auth: AuthContext, q: str | None = None, limit: int = 
 @router.get("/compound-pool")
 def compound_pool(_auth: AuthContext, q: str | None = None, limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0), settings: ApiSettings = Depends(get_settings), out_dir: str | None = None):
     return reader(settings).read_table("compound-pool", out_dir, limit=limit, offset=offset, query=q, sort_by="intervention_suitability_score")
+
+
+@router.get("/food-source-report")
+def food_source_report(_auth: AuthContext, settings: ApiSettings = Depends(get_settings), out_dir: str | None = None):
+    return reader(settings).read_json("food-source-report", out_dir)
+
+
+@router.get("/fooddb-matches")
+def fooddb_matches(_auth: AuthContext, q: str | None = None, limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0), settings: ApiSettings = Depends(get_settings), out_dir: str | None = None):
+    return reader(settings).read_table("fooddb-matches", out_dir, limit=limit, offset=offset, query=q, sort_by="match_confidence")
+
+
+@router.get("/food-sources")
+def food_sources(_auth: AuthContext, q: str | None = None, compound: str | None = None, limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0), settings: ApiSettings = Depends(get_settings), out_dir: str | None = None):
+    return reader(settings).read_table("food-sources", out_dir, limit=limit, offset=offset, query=q, filters={"pesi_compound_name": compound or ""}, sort_by="source_confidence")
+
+
+@router.get("/pair-food-context")
+def pair_food_context(_auth: AuthContext, q: str | None = None, limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0), settings: ApiSettings = Depends(get_settings), out_dir: str | None = None):
+    return reader(settings).read_table("pair-food-context", out_dir, limit=limit, offset=offset, query=q, sort_by="shared_source_confidence")
+
+
+@router.get("/pair-food-evidence")
+def pair_food_evidence(_auth: AuthContext, q: str | None = None, limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0), settings: ApiSettings = Depends(get_settings), out_dir: str | None = None):
+    return reader(settings).read_table("pair-food-evidence", out_dir, limit=limit, offset=offset, query=q, sort_by="shared_source_confidence")
+
+
+@router.get("/proxy-evidence")
+def proxy_evidence(_auth: AuthContext, q: str | None = None, limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0), settings: ApiSettings = Depends(get_settings), out_dir: str | None = None):
+    return reader(settings).read_table("proxy-evidence", out_dir, limit=limit, offset=offset, query=q)
+
+
+@router.get("/pseudo-lab")
+def pseudo_lab(_auth: AuthContext, q: str | None = None, target: str | None = None, limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0), settings: ApiSettings = Depends(get_settings), out_dir: str | None = None):
+    return reader(settings).read_table("pseudo-lab", out_dir, limit=limit, offset=offset, query=q, filters={"target_enzyme": target or ""}, sort_by="predicted_inhibition")

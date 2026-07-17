@@ -1,39 +1,54 @@
 # PESI-KG Benchmark Card
 
-## Benchmark purpose
+## Purpose
 
-Production gates verify that PESI-KG outputs are structurally valid and scientifically constrained enough for computational research workflows.
+PESI benchmarks detect structural and scientific failure modes in the computational portfolio. They do not validate biological efficacy.
 
-## Gate families
+## Existing production gate families
 
-1. Strict known-target enrichment is available and above baseline.
-2. Solvent/reactive/generic control candidates are excluded from final pairs.
-3. Target-family entropy is high enough to avoid family collapse.
-4. Developmental-stage entropy preserves lifecycle coverage.
-5. Individual compound concentration is capped.
-6. Compound portfolio breadth is maintained.
-7. Target portfolio breadth is maintained.
+1. Strict known-target enrichment above baseline.
+2. Exclusion of solvent/reactive/generic control candidates.
+3. Target-family diversity.
+4. Developmental-stage diversity.
+5. Individual compound concentration cap.
+6. Compound portfolio breadth.
+7. Target portfolio breadth.
 
-## Locked results
+Audit and medium baseline runs passed all seven gates. These metrics remain available under developer diagnostics rather than the primary user workflow.
 
-Audit and medium profiles both passed all seven gates in the validated baseline.
+## Food-source and evidence-path monitoring
+
+Version 0.5.0 adds monitoring metrics that are reported but are not yet promoted to hard production gates:
+
+- Compound mapping coverage.
+- Recommended-compound mapping coverage.
+- Pair-context coverage.
+- Shared-source pair count.
+- Ambiguous mapping rate.
+- Quantified-versus-reported occurrence share.
+- Evidence-path completeness by entity type.
+- Availability of enzyme-state, selectivity, synergy, compound-intelligence, and assay-prioritization sections.
+
+Current packaged mapping metrics:
+
+```text
+compound match coverage:              0.6200
+recommended compound match coverage:  0.6154
+pair context rows:                    293
+pairs with shared source context:      30
+```
+
+These figures describe coverage, not correctness of efficacy or source utility.
 
 ## Benchmark files
 
 ```text
-outputs/benchmark_report.json
-outputs/benchmark_leaderboard.csv
 outputs_medium/benchmark_report.json
 outputs_medium/benchmark_leaderboard.csv
-```
-
-When audit outputs are not present in a package, regenerate them with:
-
-```bash
-python -m pesi.cli.main run-all --raw raw --out outputs --artifact artifacts --sabio-mode cache --profile audit
-python -m pesi.cli.main benchmark --out outputs --artifact artifacts
+outputs_medium/food_source_mapping_report.json
+outputs_medium/aim1_kg_report.json
 ```
 
 ## Interpretation
 
-Passing gates does not imply wet-lab efficacy. Passing gates means the computational portfolio avoids major structural failure modes: repeated compounds, weak target spread, family collapse, control-compound dominance, and missing strict target enrichment.
+Passing portfolio gates means the output avoids identified computational failure modes. Food-source coverage means the system found identifier-supported occurrence context for part of the candidate set. Neither establishes extraction feasibility, biological activity, safety, selectivity, or field readiness.

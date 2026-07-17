@@ -12,6 +12,11 @@ services:
       PESI_ARTIFACT_DIR: artifacts
       PESI_FALLBACK_OUT_DIR: outputs_medium
       PESI_FALLBACK_ARTIFACT_DIR: artifacts_medium
+      PESI_FOOD_CHEMISTRY_DIR: ${PESI_FOOD_CHEMISTRY_DIR:-raw/food_chemistry}
+      PESI_FOOD_SOURCE_TOP_N: ${PESI_FOOD_SOURCE_TOP_N:-30}
+      PESI_AI_ENABLED: ${PESI_AI_ENABLED:-false}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
     ports:
       - "8000:8000"
     volumes:
@@ -27,8 +32,9 @@ services:
       context: ./apps/web
       dockerfile: Dockerfile
     environment:
-      VITE_PESI_API_BASE_URL: ${VITE_PESI_API_BASE_URL:-http://localhost:8000/api/v1}
-      VITE_PESI_API_KEY: ${PESI_API_KEY:-change-me-before-production}
+      PESI_BACKEND_API_BASE_URL: http://pesi-api:8000/api/v1
+      PESI_API_KEY: ${PESI_API_KEY:-change-me-before-production}
+      VITE_PESI_DIRECT_BACKEND: "false"
     ports:
       - "4173:4173"
     depends_on:

@@ -5,6 +5,8 @@ import type {
   GateSummary,
   InferenceOptions,
   InferenceResults,
+  RecommendationEvidence,
+  EnzymeStateReasoning,
   ReadableReport,
   RunRecord,
   TableResponse
@@ -13,7 +15,7 @@ import type {
 const DIRECT_BACKEND = import.meta.env.VITE_PESI_DIRECT_BACKEND === 'true';
 const CONFIGURED_BASE_URL = import.meta.env.VITE_PESI_API_BASE_URL as string | undefined;
 const BASE_URL = DIRECT_BACKEND && CONFIGURED_BASE_URL ? CONFIGURED_BASE_URL.replace(/\/$/, '') : '/api/pesi';
-const API_KEY = import.meta.env.VITE_PESI_API_KEY ?? '';
+const API_KEY = DIRECT_BACKEND ? (import.meta.env.VITE_PESI_API_KEY ?? '') : '';
 
 export class ApiError extends Error {
   status: number;
@@ -62,6 +64,20 @@ async function apiFetch<T>(path: string, options: RequestInit = {}, params?: Que
   return payload as T;
 }
 
+async function apiFetchBlob(path: string, options: RequestInit = {}, params?: QueryParams): Promise<Blob> {
+  const headers = new Headers(options.headers);
+  if (options.body) headers.set('Content-Type', 'application/json');
+  if (API_KEY) headers.set('X-API-Key', API_KEY);
+  const res = await fetch(makeUrl(path, params), { ...options, headers });
+  if (!res.ok) {
+    const text = await res.text();
+    let payload: unknown = text;
+    try { payload = text ? JSON.parse(text) : null; } catch { /* keep text */ }
+    throw new ApiError(readErrorMessage(payload, res.status), res.status, payload);
+  }
+  return res.blob();
+}
+
 export function activeRunId(): string {
   if (typeof localStorage === 'undefined') return '';
   return localStorage.getItem('pesi.activeRunId') ?? '';
@@ -87,7 +103,16 @@ export const api = {
   inferenceResults: (runId?: string, limit = 40) => apiFetch<InferenceResults>('/inference/results', {}, { run_id: runId || undefined, limit }),
   explainRecommendation: (body: unknown) => apiFetch<Explanation>('/inference/explain/recommendation', { method: 'POST', body: JSON.stringify(body) }),
   explainTarget: (body: unknown) => apiFetch<Explanation>('/inference/explain/target', { method: 'POST', body: JSON.stringify(body) }),
+  recommendationEvidence: (recommendationId: string, runId?: string, rowIndex?: number) =>
+    apiFetch<RecommendationEvidence>(`/inference/recommendations/${encodeURIComponent(recommendationId)}/evidence-path`, {}, { run_id: runId || undefined, row_index: rowIndex }),
+  targetStateReasoning: (targetId: string, runId?: string, rowIndex?: number) =>
+    apiFetch<EnzymeStateReasoning>(`/inference/targets/${encodeURIComponent(targetId)}/state-reasoning`, {}, { run_id: runId || undefined, row_index: rowIndex }),
+  compoundFoodSources: (compound: string, runId?: string, limit = 20) =>
+    apiFetch<Record<string, unknown>>('/inference/food-sources/compound', {}, { compound, run_id: runId || undefined, limit }),
+  pairFoodContext: (compoundA: string, compoundB: string, runId?: string) =>
+    apiFetch<Record<string, unknown>>('/inference/food-sources/pair', {}, { compound_a: compoundA, compound_b: compoundB, run_id: runId || undefined }),
   inferenceReport: (body: unknown) => apiFetch<ReadableReport>('/inference/reports', { method: 'POST', body: JSON.stringify(body) }),
+  inferenceReportHtml: (body: unknown) => apiFetchBlob('/inference/reports', { method: 'POST', body: JSON.stringify({ ...(body as Record<string, unknown>), format: 'html' }) }),
 
   launchRun: (body: unknown) => apiFetch<RunRecord>('/runs', { method: 'POST', body: JSON.stringify(body) }),
   runs: () => apiFetch<{ status: string; runs: RunRecord[] }>('/runs'),
@@ -102,6 +127,12 @@ export const api = {
   synergy: (params?: QueryParams) => apiFetch<TableResponse>('/results/synergy', {}, params),
   scenario: (params?: QueryParams) => apiFetch<TableResponse>('/results/scenario-selectivity', {}, params),
   compoundPool: (params?: QueryParams) => apiFetch<TableResponse>('/results/compound-pool', {}, params),
+  foodSourceReport: () => apiFetch<Record<string, unknown>>('/results/food-source-report'),
+  fooddbMatches: (params?: QueryParams) => apiFetch<TableResponse>('/results/fooddb-matches', {}, params),
+  foodSources: (params?: QueryParams) => apiFetch<TableResponse>('/results/food-sources', {}, params),
+  pairFoodContextTable: (params?: QueryParams) => apiFetch<TableResponse>('/results/pair-food-context', {}, params),
+  proxyEvidence: (params?: QueryParams) => apiFetch<TableResponse>('/results/proxy-evidence', {}, params),
+  pseudoLab: (params?: QueryParams) => apiFetch<TableResponse>('/results/pseudo-lab', {}, params),
   benchmarkSummary: () => apiFetch<{ status: string; production_gate_summary: GateSummary; aim4_diversity_summary: Record<string, number> }>('/benchmarks/summary'),
   benchmarkGates: () => apiFetch<{ status: string; gates: Gate[]; summary: GateSummary }>('/benchmarks/gates'),
   benchmarkLeaderboard: () => apiFetch<TableResponse>('/benchmarks/leaderboard')

@@ -13,6 +13,7 @@ from pesi.ml.pipeline import run_all
 from pesi.sabio.client import fetch_kinlaw_entries
 from pesi.config import get_run_profile
 from pesi.benchmarks.evaluate import evaluate_outputs
+from pesi.etl.fooddb_loader import build_food_source_artifacts
 
 app = typer.Typer(help="PESI-KG production research backend CLI")
 
@@ -84,6 +85,22 @@ def recommend(
         df = df[df["stage"].astype(str).str.contains(stage, case=False, na=False)]
     cols = [c for c in ["stage", "target_enzyme", "target_family", "compound_a", "compound_b", "predicted_combined_perturbation", "crop_impact_estimate", "optimization_objective", "evidence_class"] if c in df.columns]
     typer.echo(df[cols].head(top_k).to_string(index=False))
+
+
+@app.command("map-food-sources")
+def map_food_sources_cmd(
+    raw: str = typer.Option("raw", help="Raw directory containing food_chemistry"),
+    out: str = typer.Option("outputs", help="Output directory containing compound_pool and optimized interventions"),
+    artifact: str = typer.Option("artifacts", help="Artifact directory containing pesi_kg.sqlite"),
+    top_n_per_compound: int = typer.Option(30, min=1, max=200, help="Maximum FoodDB food records retained per mapped compound"),
+):
+    report = build_food_source_artifacts(
+        raw_dir=raw,
+        out_dir=out,
+        artifact_dir=artifact,
+        top_n_per_compound=top_n_per_compound,
+    )
+    typer.echo(json.dumps(report, indent=2, default=str)[:12000])
 
 
 @app.command("benchmark")

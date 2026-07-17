@@ -71,6 +71,58 @@ def explain_target(request: ExplainRequest, _auth: AuthContext, settings: ApiSet
     return adapter(settings).explain_target(request.model_dump())
 
 
+@router.get("/recommendations/{recommendation_id}/evidence-path")
+def recommendation_evidence_path(
+    recommendation_id: str,
+    _auth: AuthContext,
+    run_id: str | None = None,
+    row_index: int | None = Query(None, ge=0),
+    settings: ApiSettings = Depends(get_settings),
+):
+    return adapter(settings).recommendation_evidence({
+        "run_id": run_id,
+        "row_index": row_index,
+        "recommendation_id": recommendation_id,
+    })
+
+
+@router.get("/targets/{target_id}/state-reasoning")
+def target_state_reasoning(
+    target_id: str,
+    _auth: AuthContext,
+    run_id: str | None = None,
+    row_index: int | None = Query(None, ge=0),
+    settings: ApiSettings = Depends(get_settings),
+):
+    return adapter(settings).target_state_reasoning({
+        "run_id": run_id,
+        "row_index": row_index,
+        "target_id": target_id,
+    })
+
+
+@router.get("/food-sources/compound")
+def compound_food_sources(
+    _auth: AuthContext,
+    compound: str = Query(..., min_length=1),
+    run_id: str | None = None,
+    limit: int = Query(20, ge=1, le=100),
+    settings: ApiSettings = Depends(get_settings),
+):
+    return adapter(settings).compound_food_sources(compound, run_id=run_id, limit=limit)
+
+
+@router.get("/food-sources/pair")
+def pair_food_context(
+    _auth: AuthContext,
+    compound_a: str = Query(..., min_length=1),
+    compound_b: str = Query(..., min_length=1),
+    run_id: str | None = None,
+    settings: ApiSettings = Depends(get_settings),
+):
+    return adapter(settings).pair_food_context(compound_a, compound_b, run_id=run_id)
+
+
 @router.post("/reports")
 def report(request: InferenceReportRequest, _auth: AuthContext, settings: ApiSettings = Depends(get_settings)):
     app = adapter(settings)

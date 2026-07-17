@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 class ApiSettings(BaseModel):
     app_name: str = "PESI-KG Research Console API"
-    app_version: str = "0.4.0"
+    app_version: str = "0.5.0"
     api_prefix: str = "/api/v1"
     project_root: Path = Field(default_factory=lambda: Path.cwd())
     default_raw_dir: str = "raw"
@@ -37,6 +37,8 @@ class ApiSettings(BaseModel):
     deepseek_base_url: str = "https://api.deepseek.com/v1"
     deepseek_model: str = "deepseek-chat"
     deepseek_timeout_seconds: int = 45
+    food_chemistry_dir: str = "raw/food_chemistry"
+    food_source_top_n: int = 30
 
     def safe_path(self, value: str | Path) -> Path:
         raw = Path(value)
@@ -74,7 +76,7 @@ def get_settings() -> ApiSettings:
     auth_mode = os.getenv("PESI_AUTH_MODE", "required" if api_key else "optional").strip().lower()
     return ApiSettings(
         app_name=os.getenv("PESI_API_APP_NAME", "PESI-KG Research Console API"),
-        app_version=os.getenv("PESI_API_VERSION", "0.4.0"),
+        app_version=os.getenv("PESI_API_VERSION", "0.5.0"),
         project_root=Path(os.getenv("PESI_PROJECT_ROOT", ".")).resolve(),
         default_raw_dir=os.getenv("PESI_RAW_DIR", "raw"),
         default_out_dir=os.getenv("PESI_OUT_DIR", "outputs"),
@@ -93,4 +95,6 @@ def get_settings() -> ApiSettings:
         deepseek_base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
         deepseek_model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
         deepseek_timeout_seconds=int(os.getenv("DEEPSEEK_TIMEOUT_SECONDS", "45")),
+        food_chemistry_dir=os.getenv("PESI_FOOD_CHEMISTRY_DIR", "raw/food_chemistry"),
+        food_source_top_n=max(1, min(200, int(os.getenv("PESI_FOOD_SOURCE_TOP_N", "30")))),
     )

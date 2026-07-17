@@ -77,6 +77,145 @@ export type AnalysisProgress = {
   technical_log_available?: boolean;
 };
 
+export type FoodSourceRecord = {
+  food_id?: number | string | null;
+  food_public_id?: string | null;
+  food_name?: string | null;
+  food_name_scientific?: string | null;
+  food_group?: string | null;
+  food_subgroup?: string | null;
+  occurrence_evidence?: string | null;
+  source_confidence?: number | null;
+  standard_content?: number | null;
+  orig_content?: number | null;
+  orig_unit?: string | null;
+  citation_type?: string | null;
+  evidence_class?: string | null;
+  compound_a_occurrence_evidence?: string | null;
+  compound_b_occurrence_evidence?: string | null;
+  shared_source_confidence?: number | null;
+};
+
+export type NaturalSourceSummary = {
+  status: string;
+  shared_food_count: number;
+  shared_quantified_food_count?: number;
+  shared_source_confidence?: number | null;
+  top_shared_sources: string[];
+  compound_a_top_sources: string[];
+  compound_b_top_sources: string[];
+  evidence_class?: string | null;
+  caveat?: string | null;
+};
+
+export type NaturalSourceContext = {
+  status: string;
+  shared_food_count: number;
+  shared_quantified_food_count: number;
+  shared_source_confidence?: number | null;
+  shared_sources: FoodSourceRecord[];
+  compound_a_sources: FoodSourceRecord[];
+  compound_b_sources: FoodSourceRecord[];
+  evidence_class?: string | null;
+  caveat: string;
+};
+
+export type EvidencePathStep = {
+  order: number;
+  entity_type: string;
+  label?: string | null;
+  relationship: string;
+  source?: string | null;
+  evidence_tier: string;
+};
+
+export type EvidenceSignals = {
+  kinetic_records?: number | null;
+  kinetic_evidence?: number | null;
+  structure_evidence?: number | null;
+  plant_context?: number | null;
+  pathway_essentiality?: number | null;
+  uncertainty_penalty?: number | null;
+};
+
+export type EnzymeStateReasoning = {
+  status: string;
+  target: string;
+  family?: string | null;
+  growth_stage?: string | null;
+  target_class?: string | null;
+  why_state_matters?: string;
+  trajectory?: { peak?: number | null; curvature?: number | null; critical_transition_time?: number | null };
+  stage_signal?: { trajectory_peak?: number | null; trajectory_curvature?: number | null; critical_transition_time?: number | null };
+  evidence_signals?: EvidenceSignals;
+  scenario_selectivity?: {
+    weed_vulnerability?: number | null;
+    crop_vulnerability?: number | null;
+    selectivity_margin?: number | null;
+    stage_relevance?: string | null;
+    evidence_class?: string | null;
+    limitation?: string;
+  };
+  pathway_context?: Array<Record<string, unknown>>;
+  source?: string | null;
+  evidence_class?: string | null;
+  limitation?: string;
+  limitations?: string[];
+};
+
+export type CompoundIntelligence = {
+  compound: string;
+  why_allowed: string;
+  why_prioritized: string;
+  phytochemical_class?: string | null;
+  functional_groups: string[];
+  natural_product_evidence?: number | null;
+  availability_signal?: number | null;
+  hazard_proxy?: number | null;
+  persistence_proxy?: number | null;
+  intervention_suitability?: number | null;
+  source?: string | null;
+  evidence_class?: string | null;
+  limitation: string;
+};
+
+export type AssayPrioritization = {
+  status: string;
+  label?: string;
+  relative_input_band?: [number, number] | number[];
+  simulated_max_inhibition?: number | null;
+  model?: string;
+  interpretation?: string;
+  evidence_class?: string;
+};
+
+export type ConfidenceAndLimitations = {
+  overall: string;
+  direct_evidence: string[];
+  model_inference: string[];
+  proxy_assumptions: string[];
+  weak_or_unsupported_assumptions: string[];
+  scientific_boundary: string;
+};
+
+export type RecommendationEvidence = {
+  status: string;
+  recommendation_id?: string;
+  summary?: string;
+  path: EvidencePathStep[];
+  enzyme_state_reasoning: EnzymeStateReasoning;
+  scenario_selectivity: Record<string, unknown>;
+  synergy_reasoning: Record<string, unknown>;
+  compound_intelligence: { compound_a: CompoundIntelligence; compound_b: CompoundIntelligence };
+  natural_source_context: NaturalSourceContext;
+  assay_prioritization: AssayPrioritization;
+  pathway_context: Array<Record<string, unknown>>;
+  confidence_and_limitations: ConfidenceAndLimitations;
+  source_artifacts: string[];
+  caveats: string[];
+  message?: string;
+};
+
 export type Recommendation = {
   row_index: number;
   id: string;
@@ -95,6 +234,8 @@ export type Recommendation = {
   validation_note: string;
   risk_level: string;
   raw_scores?: Record<string, number | null>;
+  natural_source_summary?: NaturalSourceSummary;
+  evidence_path_available?: boolean;
 };
 
 export type TargetInsight = {
@@ -109,6 +250,10 @@ export type TargetInsight = {
   support_note: string;
   validation_note: string;
   raw_scores?: Record<string, number | null>;
+  state_reasoning_available?: boolean;
+  biology?: string;
+  validationNeed?: string;
+  raw?: Record<string, unknown>;
 };
 
 export type ScenarioNote = { title: string; body: string };
@@ -123,6 +268,12 @@ export type InferenceResults = {
   scenario_notes: ScenarioNote[];
   synergy_notes: SynergyNote[];
   filters: Record<string, string[]>;
+  food_source_mapping?: {
+    status: string;
+    recommended_match_coverage?: number | null;
+    pairs_with_shared_sources?: number;
+    caveat?: string | null;
+  };
   caveats: string[];
 };
 
@@ -137,6 +288,8 @@ export type Explanation = {
   ai_source?: string;
   ai_status?: string;
   message?: string;
+  evidence_path?: RecommendationEvidence;
+  enzyme_state_reasoning?: EnzymeStateReasoning;
 };
 
 export type ReadableReport = {
@@ -147,6 +300,36 @@ export type ReadableReport = {
   sections: ExplanationSection[];
   recommendations: Recommendation[];
   targets: TargetInsight[];
+  recommendation_evidence?: RecommendationEvidence[];
+  target_state_reasoning?: EnzymeStateReasoning[];
+  food_source_mapping?: Record<string, unknown>;
+  caveats: string[];
+};
+
+// Compatibility types retained for legacy adapter helpers that are not part of the primary UI flow.
+export type RecommendationCard = {
+  id: string;
+  target: string;
+  targetFamily: string;
+  stage: string;
+  compounds: [string, string];
+  scoreLabel: string;
+  evidenceStrength: 'Strong' | 'Moderate' | 'Exploratory';
+  riskLevel: string;
+  classLabel: string;
+  shortReason: string;
+  biologicalReason: string;
+  chemicalReason: string;
+  synergyReason: string;
+  caveat: string;
+  validationSteps: string[];
+  raw: Record<string, unknown>;
+};
+
+export type ExplanationView = {
+  title: string;
+  lead: string;
+  sections: ExplanationSection[];
   caveats: string[];
 };
 

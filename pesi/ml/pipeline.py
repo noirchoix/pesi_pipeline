@@ -3,6 +3,7 @@ from __future__ import annotations
 import itertools
 import json
 import math
+import os
 import random
 import re
 from pathlib import Path
@@ -23,6 +24,7 @@ from sklearn.preprocessing import StandardScaler
 
 from pesi.core.utils import ensure_dir, to_number, write_json
 from pesi.etl.kg_builder import build_pesi_kg
+from pesi.etl.fooddb_loader import build_food_source_artifacts
 from pesi.domain.compound_rules import (
     annotate_compound_pool,
     canonicalize_compound_pair,
@@ -1983,6 +1985,25 @@ def run_all(raw_dir: str | Path, out_dir: str | Path, artifact_dir: str | Path, 
     pseudo = pseudo_lab_simulations(optimized, out_dir)
     print(f"[PESI] pseudo-lab done in {time.time()-_t:.1f}s", flush=True)
 
+    _t=time.time(); print("[PESI] mapping compounds to FoodDB food sources", flush=True)
+    try:
+        food_source_report = build_food_source_artifacts(
+            raw_dir=raw_dir,
+            out_dir=out_dir,
+            optimized=optimized,
+            compound_pool=None,
+            artifact_dir=artifact_dir,
+            top_n_per_compound=max(1, min(200, int(os.getenv("PESI_FOOD_SOURCE_TOP_N", "30")))),
+        )
+    except Exception as exc:
+        food_source_report = {
+            "status": "failed",
+            "error": repr(exc),
+            "evidence_policy": "No food-source claims were emitted because FoodDB mapping failed.",
+        }
+        write_json(Path(out_dir) / "food_source_mapping_report.json", food_source_report)
+    print(f"[PESI] food-source mapping done in {time.time()-_t:.1f}s status={food_source_report.get('status')}", flush=True)
+
     models = {}
     _t=time.time(); print("[PESI] family classifier", flush=True)
     family_model, family_report = train_family_classifier(data.get("curated_families", pd.DataFrame()), artifact_dir)
@@ -2009,6 +2030,7 @@ def run_all(raw_dir: str | Path, out_dir: str | Path, artifact_dir: str | Path, 
         "aim4_inhibit_synergy_group_rows": synergy_group_rows,
         "scenario_selectivity_rows": scenario_selectivity_rows,
         "pseudo_lab_rows": int(len(pseudo)) if pseudo is not None else 0,
+        "food_source_mapping": food_source_report,
         "axioms_implemented": [
             "finite_enzyme_processes_as_enzyme_universe_and_stage_anchors",
             "discrete_transitions_as_development_stage_nodes_and_trajectory_curvature",

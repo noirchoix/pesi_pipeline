@@ -20,6 +20,11 @@ CSV_MAP = {
     "compound-pool": "compound_pool.csv",
     "pseudo-lab": "pseudo_lab_dose_response.csv",
     "leaderboard": "benchmark_leaderboard.csv",
+    "fooddb-matches": "compound_fooddb_matches.csv",
+    "food-sources": "compound_food_sources.csv",
+    "pair-food-context": "pair_food_source_context.csv",
+    "pair-food-evidence": "pair_food_source_evidence.csv",
+    "proxy-evidence": "proxy_evidence_report.csv",
 }
 
 JSON_MAP = {
@@ -30,6 +35,8 @@ JSON_MAP = {
     "aim4-report": "aim4_optimization_report.json",
     "scenario-report": "scenario_selectivity_report.json",
     "unsupported-assumptions": "unsupported_assumptions.json",
+    "food-source-report": "food_source_mapping_report.json",
+    "pseudo-lab-report": "pseudo_lab_report.json",
 }
 
 
