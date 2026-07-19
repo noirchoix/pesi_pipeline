@@ -47,7 +47,14 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, Any]:
-        return {"status": "ok", "service": settings.app_name, "version": settings.app_version, "auth_mode": settings.auth_mode}
+        from pesi.api.services.llm_client import DeepSeekClient
+        return {
+            "status": "ok",
+            "service": settings.app_name,
+            "version": settings.app_version,
+            "auth_mode": settings.auth_mode,
+            "ai": DeepSeekClient(settings).configuration_status(),
+        }
 
     @app.get(f"{settings.api_prefix}/health")
     def api_health() -> dict[str, Any]:

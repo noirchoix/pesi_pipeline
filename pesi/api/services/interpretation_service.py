@@ -6,6 +6,10 @@ import pandas as pd
 
 from pesi.api.config import ApiSettings
 from pesi.api.services.artifact_reader import ArtifactReader
+from pesi.domain.compound_rules import canonicalize_compound_pair, canonicalize_text_key
+from pesi.domain.enzyme_identity import resolve_enzyme_identity
+from pesi.domain.herbicide_targets import match_herbicide_targets
+from pesi.domain.scientific_semantics import classify_selectivity_scope
 
 MANDATORY_CAVEATS = [
     "Computational candidate only.",
@@ -92,8 +96,18 @@ class InterpretationService:
         if row_index is not None and row_index < len(rows):
             chosen = rows[row_index]
         elif target:
-            t = target.lower()
-            chosen = next((r for r in rows if t in str(r.get("enzyme_name", "")).lower()), None)
+            requested = resolve_enzyme_identity(target)
+            requested_id = requested.get("canonical_id")
+            chosen = next(
+                (
+                    r for r in rows
+                    if resolve_enzyme_identity(
+                        r.get("enzyme_name") or r.get("target_enzyme"),
+                        r.get("enzyme_family") or r.get("target_family"),
+                    ).get("canonical_id") == requested_id
+                ),
+                None,
+            )
         chosen = chosen or (rows[0] if rows else None)
         return {"status": "ok" if chosen else "missing", "target_rationale": self._target_rationale(chosen) if chosen else None, "caveats": MANDATORY_CAVEATS}
 
@@ -104,13 +118,16 @@ class InterpretationService:
         if getattr(request, "row_index", None) is not None and request.row_index < len(rows):
             chosen = rows[request.row_index]
         else:
-            target = (getattr(request, "target_enzyme", None) or getattr(request, "target", None) or "").lower()
-            a = (getattr(request, "compound_a", None) or "").lower()
-            b = (getattr(request, "compound_b", None) or "").lower()
+            requested_target = getattr(request, "target_enzyme", None) or getattr(request, "target", None) or ""
+            requested_target_id = resolve_enzyme_identity(requested_target).get("canonical_id") if requested_target else None
+            requested_a = canonicalize_text_key(getattr(request, "compound_a", None) or "")
+            requested_b = canonicalize_text_key(getattr(request, "compound_b", None) or "")
             for r in rows:
-                target_ok = not target or target in str(r.get("target_enzyme", "")).lower()
-                a_ok = not a or a in str(r.get("compound_a", "")).lower() or a in str(r.get("compound_b", "")).lower()
-                b_ok = not b or b in str(r.get("compound_a", "")).lower() or b in str(r.get("compound_b", "")).lower()
+                row_target_id = resolve_enzyme_identity(r.get("target_enzyme"), r.get("target_family")).get("canonical_id")
+                target_ok = not requested_target_id or row_target_id == requested_target_id
+                row_pair = set(canonicalize_compound_pair(r.get("compound_a"), r.get("compound_b")))
+                a_ok = not requested_a or requested_a in row_pair
+                b_ok = not requested_b or requested_b in row_pair
                 if target_ok and a_ok and b_ok:
                     chosen = r
                     break
@@ -129,22 +146,48 @@ class InterpretationService:
     def _target_rationale(self, row: dict[str, Any] | None) -> dict[str, Any]:
         if not row:
             return {}
-        target = row.get("enzyme_name") or row.get("target_enzyme")
-        high = bool(row.get("high_confidence_known_target_label"))
+        reported_target = row.get("enzyme_name") or row.get("target_enzyme")
+        reported_family = row.get("enzyme_family") or row.get("target_family")
+        identity = resolve_enzyme_identity(reported_target, reported_family, source=row.get("source_evidence"))
+        atlas = match_herbicide_targets(
+            identity.get("canonical_name"),
+            identity.get("canonical_family"),
+            row.get("stage_assigned") or row.get("stage"),
+        )
+        mapping_status = atlas.get("target_match_status")
+        if mapping_status in {"validated", "validated_target"}:
+            herbicide_context = (
+                f"Validated target-specific atlas mapping: {atlas.get('herbicide_target_family')}; "
+                f"site of action: {atlas.get('herbicide_site_of_action')}; "
+                f"curated inhibitor classes: {atlas.get('known_inhibitor_classes') or 'not listed'}."
+            )
+        elif mapping_status == "family_context":
+            herbicide_context = (
+                "Only broad family/process context is available. No target-specific inhibitor class or WSSA group is asserted."
+            )
+        else:
+            herbicide_context = (
+                "No target-specific herbicide-atlas identity was validated; pathway and inhibitor-class claims are withheld."
+            )
+        high = bool(row.get("high_confidence_known_target_label")) and mapping_status in {"validated", "validated_target"}
         return {
-            "target": target,
-            "target_family": row.get("enzyme_family") or row.get("target_family"),
+            "target": identity.get("canonical_name"),
+            "target_reported": reported_target,
+            "target_canonical_id": identity.get("canonical_id"),
+            "target_family": identity.get("canonical_family"),
+            "target_family_reported": reported_family,
+            "identity_resolution": identity,
             "stage": row.get("stage_assigned") or row.get("stage"),
             "why_ranked": (
-                f"{target} was prioritized from pathway essentiality, kinetic/structural evidence, stage trajectory signals, "
-                f"and herbicide/transition-target priors. Critical transition score: {_score(row.get('critical_transition_score'))}."
+                f"{identity.get('canonical_name')} was ranked using pathway-essentiality and enzyme-state model signals, "
+                f"available kinetic/structural/plant-context evidence, and uncertainty penalties. "
+                f"Critical-transition score: {_score(row.get('critical_transition_score'))}. "
+                "A strong model signal is not presented as confirmed pathway membership when target-specific atlas identity is unresolved."
             ),
-            "herbicide_biology": (
-                f"Atlas match: {row.get('herbicide_target_family')}; site of action: {row.get('herbicide_site_of_action')}; "
-                f"known inhibitor classes: {row.get('known_inhibitor_classes')}."
-            ),
+            "herbicide_biology": herbicide_context,
+            "target_atlas_validation": atlas,
             "high_confidence_known_target_label": high,
-            "high_confidence_target_basis": row.get("high_confidence_target_basis"),
+            "high_confidence_target_basis": row.get("high_confidence_target_basis") if high else None,
             "evidence_class": row.get("evidence_class"),
             "limitations": "Ranking is computational and requires target-specific biochemical and plant assay validation.",
         }
@@ -152,27 +195,58 @@ class InterpretationService:
     def _intervention_rationale(self, row: dict[str, Any] | None) -> dict[str, Any]:
         if not row:
             return {}
+        reported_target = row.get("target_enzyme")
+        reported_family = row.get("target_family")
+        identity = resolve_enzyme_identity(reported_target, reported_family)
+        ca, cb = canonicalize_compound_pair(row.get("compound_a"), row.get("compound_b"))
+        display_pair = sorted(
+            [str(row.get("compound_a") or ""), str(row.get("compound_b") or "")],
+            key=canonicalize_text_key,
+        )
+        scope = classify_selectivity_scope(row)
+        scope_note = (
+            "Target-specific crop-versus-weed inputs were present."
+            if scope["selectivity_scope"] == "target_specific"
+            else "This is a scenario-level baseline applied to the target context, not a target-specific selectivity measurement."
+        )
+        atlas = match_herbicide_targets(
+            identity.get("canonical_name"), identity.get("canonical_family"), row.get("stage")
+        )
         return {
-            "target": row.get("target_enzyme"),
-            "target_family": row.get("target_family"),
+            "target": identity.get("canonical_name"),
+            "target_reported": reported_target,
+            "target_canonical_id": identity.get("canonical_id"),
+            "target_family": identity.get("canonical_family"),
+            "target_family_reported": reported_family,
+            "identity_resolution": identity,
+            "target_atlas_validation": atlas,
             "stage": row.get("stage"),
-            "compound_pair": [row.get("compound_a"), row.get("compound_b")],
+            "compound_pair": display_pair,
+            "canonical_pair_key": f"{ca}||{cb}",
             "optimization_objective": _score(row.get("optimization_objective")),
+            "optimization_objective_raw": _score(row.get("optimization_objective_raw")),
+            "evidence_adjusted_priority": row.get("evidence_adjusted_priority") or "Not evaluated in this artifact",
+            "evidence_adjusted_priority_score": _score(row.get("evidence_adjusted_priority_score")),
+            "scientific_priority_gating_reasons": str(row.get("scientific_priority_gating_reasons") or "").split(";") if row.get("scientific_priority_gating_reasons") else [],
             "intervention_suitability_score": _score(row.get("intervention_suitability_score")),
             "phytochemical_class_pair": row.get("phytochemical_class_pair"),
             "rationale": (
                 f"The pair combines {row.get('compound_a_priority_class')} and {row.get('compound_b_priority_class')} evidence, "
                 f"with functional-group hits {row.get('compound_a_functional_group_hits')} / {row.get('compound_b_functional_group_hits')} "
-                f"and predicted combined perturbation {_score(row.get('predicted_combined_perturbation'))}."
+                f"and predicted combined perturbation {_score(row.get('predicted_combined_perturbation'))}. "
+                "These are model-derived screening features rather than measured compound-target engagement."
             ),
             "synergy_basis": (
                 f"Inhibit-synergy flag: {row.get('inhibit_synergy')}; score {_score(row.get('synergy_group_score'))}; "
                 f"schema: {row.get('synergy_match_schema')}; evidence: {row.get('synergy_evidence_class')}."
             ),
             "selectivity_notes": (
-                f"Scenario selectivity margin {_score(row.get('scenario_selectivity_margin'))}; "
-                f"weed vulnerability {_score(row.get('weed_vulnerability_score'))}; crop vulnerability {_score(row.get('crop_vulnerability_score'))}."
+                f"Weed-minus-crop selectivity difference {_score(row.get('scenario_selectivity_margin'))}; "
+                f"centered ranking index {_score(row.get('scenario_selectivity_index'))}; "
+                f"weed vulnerability {_score(row.get('weed_vulnerability_score'))}; crop vulnerability {_score(row.get('crop_vulnerability_score'))}. "
+                f"{scope_note} The centered index is used for ranking and must not be described as the biological difference."
             ),
+            "selectivity_scope": scope,
             "risk_notes": {
                 "crop_impact_estimate": _score(row.get("crop_impact_estimate")),
                 "toxicity_hazard_proxy": _score(row.get("toxicity_hazard_proxy")),

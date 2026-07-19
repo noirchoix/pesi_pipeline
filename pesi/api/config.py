@@ -6,11 +6,12 @@ from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field
+from dotenv import load_dotenv
 
 
 class ApiSettings(BaseModel):
     app_name: str = "PESI-KG Research Console API"
-    app_version: str = "0.5.0"
+    app_version: str = "0.7.0"
     api_prefix: str = "/api/v1"
     project_root: Path = Field(default_factory=lambda: Path.cwd())
     default_raw_dir: str = "raw"
@@ -37,6 +38,8 @@ class ApiSettings(BaseModel):
     deepseek_base_url: str = "https://api.deepseek.com/v1"
     deepseek_model: str = "deepseek-chat"
     deepseek_timeout_seconds: int = 45
+    deepseek_max_tokens: int = 2200
+    env_file: Path | None = None
     food_chemistry_dir: str = "raw/food_chemistry"
     food_source_top_n: int = 30
 
@@ -68,15 +71,44 @@ class ApiSettings(BaseModel):
         return fallback if fallback.exists() else candidate
 
 
+def _load_project_environment() -> Path | None:
+    """Load the project .env without overriding process-level variables."""
+    explicit = os.getenv("PESI_ENV_FILE", "").strip()
+    candidates: list[Path] = []
+    if explicit:
+        candidates.append(Path(explicit).expanduser())
+    project_root_hint = os.getenv("PESI_PROJECT_ROOT", "").strip()
+    if project_root_hint:
+        candidates.append(Path(project_root_hint).expanduser() / ".env")
+    candidates.append(Path.cwd() / ".env")
+    module_root = Path(__file__).resolve().parents[2]
+    candidates.append(module_root / ".env")
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except Exception:
+            continue
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if resolved.is_file():
+            load_dotenv(resolved, override=False)
+            return resolved
+    return None
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> ApiSettings:
+    env_file = _load_project_environment()
     origins = os.getenv("PESI_CORS_ORIGINS", "").strip()
     cors = [x.strip() for x in origins.split(",") if x.strip()] or None
     api_key = os.getenv("PESI_API_KEY", "").strip() or None
     auth_mode = os.getenv("PESI_AUTH_MODE", "required" if api_key else "optional").strip().lower()
     return ApiSettings(
         app_name=os.getenv("PESI_API_APP_NAME", "PESI-KG Research Console API"),
-        app_version=os.getenv("PESI_API_VERSION", "0.5.0"),
+        app_version=os.getenv("PESI_API_VERSION", "0.7.0"),
         project_root=Path(os.getenv("PESI_PROJECT_ROOT", ".")).resolve(),
         default_raw_dir=os.getenv("PESI_RAW_DIR", "raw"),
         default_out_dir=os.getenv("PESI_OUT_DIR", "outputs_medium"),
@@ -95,6 +127,8 @@ def get_settings() -> ApiSettings:
         deepseek_base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
         deepseek_model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
         deepseek_timeout_seconds=int(os.getenv("DEEPSEEK_TIMEOUT_SECONDS", "45")),
+        deepseek_max_tokens=max(256, min(8192, int(os.getenv("DEEPSEEK_MAX_TOKENS", "2200")))),
+        env_file=env_file,
         food_chemistry_dir=os.getenv("PESI_FOOD_CHEMISTRY_DIR", "raw/food_chemistry"),
         food_source_top_n=max(1, min(200, int(os.getenv("PESI_FOOD_SOURCE_TOP_N", "30")))),
     )

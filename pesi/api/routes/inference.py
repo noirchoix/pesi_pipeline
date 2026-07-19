@@ -3,11 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from pesi.api.auth import AuthContext
 from pesi.api.config import ApiSettings, get_settings
 from pesi.api.services.inference_adapter import InferenceAdapter
+from pesi.api.services.json_safe import to_json_safe
 
 router = APIRouter(prefix="/inference", tags=["inference"])
 
@@ -129,4 +131,4 @@ def report(request: InferenceReportRequest, _auth: AuthContext, settings: ApiSet
     payload = request.model_dump()
     if request.format == "html":
         return Response(content=app.build_report_html(payload), media_type="text/html")
-    return app.build_report(payload)
+    return JSONResponse(content=to_json_safe(app.build_report(payload)))

@@ -33,6 +33,9 @@ from pesi.domain.compound_rules import (
     pair_phytochemical_class_key,
 )
 from pesi.domain.herbicide_targets import match_herbicide_targets
+from pesi.domain.compound_identity import canonical_compound_identity, canonical_compound_pair_key
+from pesi.domain.enzyme_identity import canonicalize_enzyme_frame, resolve_enzyme_identity
+from pesi.domain.scientific_semantics import evidence_adjusted_assay_priority
 from pesi.domain.synergy import build_synergy_groups, score_pair_synergy
 from pesi.domain.selectivity import estimate_contextual_selectivity, write_scenario_selectivity_report
 from pesi.schemas.scenario import FieldScenario
@@ -169,6 +172,9 @@ def _make_enzyme_universe(data: dict[str, Any]) -> pd.DataFrame:
     df["organism_count"] = pd.to_numeric(df.get("organism_count", 0), errors="coerce").fillna(0)
     df["plant_like_records"] = pd.to_numeric(df.get("plant_like_records", 0), errors="coerce").fillna(0)
     df["anchor_hit"] = pd.to_numeric(df.get("anchor_hit", 0), errors="coerce").fillna(0)
+    # Canonical identity resolution occurs before feature engineering so aliases
+    # and family conflicts cannot inflate target counts or propagate into Aim 3/4.
+    df = canonicalize_enzyme_frame(df, replace_display_fields=True)
     return df
 
 
@@ -1003,8 +1009,7 @@ def rank_critical_transition_enzymes(
     model_report["semantic_dedupe_keys"] = dedupe_keys
     model_report["semantic_deduplication"] = True
 
-    if "enzyme_name_canonical" in out.columns:
-        out = out.drop(columns=["enzyme_name_canonical"])
+    # Canonical identity and reported-name/family fields are retained for audit.
 
     if "known_target_label" in out.columns:
         model_report["known_target_base_rate_after_dedup"] = float(pd.to_numeric(out["known_target_label"], errors="coerce").fillna(0).mean())
@@ -1107,7 +1112,26 @@ def build_compound_pool(data: dict[str, Any], top_n: int = 600) -> pd.DataFrame:
     cp["smiles"] = cp.get("smiles", pd.Series([None] * len(cp))).astype(object)
     cp["compound_name"] = cp["compound_name"].fillna(cp["compound_id"]).astype(str)
     cp["compound_name_canonical"] = cp["compound_name"].map(canonicalize_text_key)
-    cp = cp.drop_duplicates(subset=["compound_name_canonical", "smiles"], keep="first").reset_index(drop=True)
+
+    identity_rows = cp.apply(
+        lambda row: canonical_compound_identity(
+            name=row.get("compound_name"),
+            smiles=row.get("smiles"),
+            source_id=row.get("compound_id"),
+            source_resource=row.get("source_resource"),
+        ),
+        axis=1,
+    ).apply(pd.Series)
+    for column in identity_rows.columns:
+        cp[column] = identity_rows[column].values
+    # Structure-backed or curated-record identity is the de-duplication key. A
+    # normalized name is only a last-resort identity and is never equated with a
+    # structure-backed record.
+    cp = cp.sort_values(
+        ["structure_backed_identity", "compound_identity_confidence"],
+        ascending=[False, False],
+        kind="mergesort",
+    ).drop_duplicates(subset=["canonical_compound_id"], keep="first").reset_index(drop=True)
 
     desc = cp["smiles"].map(_rdkit_descriptors).apply(pd.Series)
     cp = pd.concat([cp.reset_index(drop=True), desc.reset_index(drop=True)], axis=1)
@@ -1201,20 +1225,40 @@ def select_diverse_interventions(
         df["optimization_objective"] = 0.0
 
     df["optimization_objective"] = pd.to_numeric(df["optimization_objective"], errors="coerce").fillna(0.0)
-    df["target_enzyme_canonical"] = df["target_enzyme"].map(canonicalize_text_key)
-    df["target_family_canonical"] = df["target_family"].map(canonicalize_text_key)
+
+    def _selection_identity(row: pd.Series) -> dict[str, Any]:
+        existing_id = str(row.get("target_canonical_id") or "").strip()
+        existing_family = str(row.get("target_family_canonical") or "").strip()
+        identity = resolve_enzyme_identity(row.get("target_enzyme"), row.get("target_family"))
+        return {
+            "target_identity_key": existing_id or identity["canonical_id"],
+            "target_family_key": canonicalize_text_key(existing_family or identity["canonical_family"]),
+        }
+
+    selection_identities = df.apply(_selection_identity, axis=1).apply(pd.Series)
+    df["target_identity_key"] = selection_identities["target_identity_key"].values
+    # Backward-compatible internal helper now contains the canonical identity ID,
+    # not a free-text target token.
+    df["target_enzyme_canonical"] = df["target_identity_key"]
+    df["target_family_canonical"] = selection_identities["target_family_key"].values
     df["stage_canonical"] = df["stage"].map(canonicalize_text_key)
     df["compound_a_canonical"] = df["compound_a"].map(canonicalize_text_key)
     df["compound_b_canonical"] = df["compound_b"].map(canonicalize_text_key)
     df["compound_pair_canonical"] = df.apply(
-        lambda r: "||".join(canonicalize_compound_pair(r["compound_a"], r["compound_b"])), axis=1
+        lambda r: canonical_compound_pair_key(
+            r.get("compound_a_canonical_id") or r.get("compound_a"),
+            r.get("compound_b_canonical_id") or r.get("compound_b"),
+            compound_a_name=r.get("compound_a"),
+            compound_b_name=r.get("compound_b"),
+        ),
+        axis=1,
     )
     df["compound_a_phytochemical_class_key"] = df["compound_a_phytochemical_class"].map(canonicalize_text_key)
     df["compound_b_phytochemical_class_key"] = df["compound_b_phytochemical_class"].map(canonicalize_text_key)
     df["phytochemical_class_pair_key"] = df.apply(lambda r: pair_phytochemical_class_key(r), axis=1)
 
     # Semantic de-duplication keeps only the strongest row for the same target/stage/pair.
-    dedupe_cols = ["target_enzyme_canonical", "target_family_canonical", "stage_canonical", "compound_pair_canonical"]
+    dedupe_cols = ["target_identity_key", "stage_canonical", "compound_pair_canonical"]
     df = (
         df.sort_values("optimization_objective", ascending=False)
         .drop_duplicates(subset=dedupe_cols, keep="first")
@@ -1228,7 +1272,7 @@ def select_diverse_interventions(
     # Bound only extremely large candidate sets. This keeps the selector fast while
     # preserving target/family breadth and high-scoring global candidates.
     bounded_parts: list[pd.DataFrame] = [df.head(min(len(df), 35000))]
-    bounded_parts.append(df.groupby("target_enzyme_canonical", group_keys=False).head(350))
+    bounded_parts.append(df.groupby("target_identity_key", group_keys=False).head(350))
     bounded_parts.append(df.groupby("target_family_canonical", group_keys=False).head(2500))
     bounded_parts.append(df.groupby("stage_canonical", group_keys=False).head(3500))
     df = pd.concat(bounded_parts, ignore_index=False)
@@ -1264,7 +1308,7 @@ def select_diverse_interventions(
 
     def _row_keys(r: pd.Series) -> tuple[str, str, str, str, str, str, str, str, str]:
         return (
-            str(r.get("target_enzyme_canonical", "")),
+            str(r.get("target_identity_key", r.get("target_enzyme_canonical", ""))),
             str(r.get("target_family_canonical", "")),
             str(r.get("stage_canonical", "")),
             str(r.get("compound_pair_canonical", "")),
@@ -1339,7 +1383,7 @@ def select_diverse_interventions(
 
     # Pre-compute a deterministic portfolio priority. This does not depend on
     # current counts, so subsequent passes remain linear.
-    target_rank = df.groupby("target_enzyme_canonical").cumcount()
+    target_rank = df.groupby("target_identity_key").cumcount()
     family_rank = df.groupby("target_family_canonical").cumcount()
     pair_rank = df.groupby("compound_pair_canonical").cumcount()
     class_pair_rank = df.groupby("phytochemical_class_pair_key").cumcount()
@@ -1465,6 +1509,9 @@ def select_diverse_interventions(
         "selection_policy": "fast_portfolio_breadth_selector_v2",
         "input_rows": int(len(scored)),
         "deduplicated_input_rows": int(len(df)),
+        "semantic_deduplication": True,
+        "target_identity_key_policy": "canonical enzyme/target ID plus growth stage",
+        "compound_pair_key_policy": "unordered canonical compound pair",
         "target_rows": int(target_rows),
         "selected_rows": int(len(out)),
         "selection_phases": {str(k): int(v) for k, v in out.get("diversity_selection_phase", pd.Series(dtype=str)).value_counts().to_dict().items()},
@@ -1509,6 +1556,7 @@ def select_diverse_interventions(
     }
 
     drop_cols = [
+        "target_identity_key",
         "target_enzyme_canonical",
         "target_family_canonical",
         "stage_canonical",
@@ -1575,31 +1623,33 @@ def optimize_inhibitor_combinations(
     if "stage_assigned" not in targets.columns and "stage" in targets.columns:
         targets["stage_assigned"] = targets["stage"]
 
-    required_atlas_cols = {
-        "herbicide_target_family",
-        "herbicide_site_of_action",
-        "herbicide_target_score",
-        "known_inhibitor_classes",
-        "wssa_group",
-        "resistance_risks",
-    }
-    if not required_atlas_cols.issubset(set(targets.columns)):
-        atlas_rows = targets.apply(
-            lambda r: match_herbicide_targets(r.get("enzyme_name"), r.get("enzyme_family"), r.get("stage_assigned")),
-            axis=1,
-        ).apply(pd.Series)
-        # Do not create duplicate column names when Aim 3 already exposed atlas labels.
-        for col in atlas_rows.columns:
-            if col not in targets.columns:
-                targets[col] = atlas_rows[col].values
-            else:
-                targets[col] = targets[col].where(targets[col].notna(), atlas_rows[col].values)
+    targets = canonicalize_enzyme_frame(targets, replace_display_fields=True)
 
+    # Always recompute target-atlas associations through the strict identity validator.
+    # Existing/legacy annotations are retained for audit but cannot override a
+    # failed target-identity match.
+    atlas_rows = targets.apply(
+        lambda r: match_herbicide_targets(r.get("enzyme_name"), r.get("enzyme_family"), r.get("stage_assigned")),
+        axis=1,
+    ).apply(pd.Series)
+    for col in atlas_rows.columns:
+        if col in targets.columns and targets[col].notna().any():
+            legacy_col = f"legacy_{col}"
+            if legacy_col not in targets.columns:
+                targets[legacy_col] = targets[col]
+        targets[col] = atlas_rows[col].values
+
+    # Recompute selectivity semantics and overwrite ambiguous legacy fields.
     selectivity_rows = targets.apply(lambda r: estimate_contextual_selectivity(r, FieldScenario()), axis=1).apply(pd.Series)
-    targets = pd.concat([targets.reset_index(drop=True), selectivity_rows.reset_index(drop=True)], axis=1)
+    for col in selectivity_rows.columns:
+        if col in targets.columns and targets[col].notna().any():
+            legacy_col = f"legacy_{col}"
+            if legacy_col not in targets.columns:
+                targets[legacy_col] = targets[col]
+        targets[col] = selectivity_rows[col].values
 
-    targets["target_name_canonical"] = targets["enzyme_name"].map(canonicalize_text_key)
-    target_dedupe_keys = [c for c in ["target_name_canonical", "enzyme_family", "stage_assigned"] if c in targets.columns]
+    targets["target_name_canonical"] = targets["enzyme_name_canonical"].map(canonicalize_text_key)
+    target_dedupe_keys = [c for c in ["enzyme_canonical_id", "stage_assigned"] if c in targets.columns]
     if target_dedupe_keys:
         targets = targets.drop_duplicates(subset=target_dedupe_keys, keep="first")
 
@@ -1607,7 +1657,7 @@ def optimize_inhibitor_combinations(
     targets["target_priority_score"] = (
         0.58 * pd.to_numeric(targets.get("critical_transition_score", 0), errors="coerce").fillna(0)
         + 0.24 * pd.to_numeric(targets.get("herbicide_target_score", 0), errors="coerce").fillna(0)
-        + 0.18 * pd.to_numeric(targets.get("scenario_selectivity_margin", 0.5), errors="coerce").fillna(0.5)
+        + 0.18 * pd.to_numeric(targets.get("scenario_selectivity_index", targets.get("scenario_selectivity_margin", 0.5)), errors="coerce").fillna(0.5)
     )
     targets = targets.sort_values("target_priority_score", ascending=False).head(top_targets).copy()
     write_scenario_selectivity_report(targets, out_dir, FieldScenario())
@@ -1689,7 +1739,10 @@ def optimize_inhibitor_combinations(
             suitability_a = _num(a.get("intervention_suitability_score"), 0.2)
             suitability_b = _num(b.get("intervention_suitability_score"), 0.2)
             target_rule_score = _num(t.get("herbicide_target_score"), 0.0)
-            scenario_selectivity = _num(t.get("scenario_selectivity_margin"), _num(t.get("crop_selectivity_margin"), 0.5))
+            scenario_selectivity = _num(
+                t.get("scenario_selectivity_index"),
+                _num(t.get("scenario_selectivity_margin"), _num(t.get("crop_selectivity_margin"), 0.5)),
+            )
 
             base_a = float(np.clip(
                 0.18
@@ -1736,7 +1789,7 @@ def optimize_inhibitor_combinations(
                 _num(b.get("solvent_penalty"), 0.0) + _num(b.get("reactive_aldehyde_penalty"), 0.0) + _num(b.get("generic_assay_penalty"), 0.0),
             ]))
 
-            objective = (
+            objective_raw = (
                 0.56 * combined
                 + 0.20 * synergy_info["synergy_group_score"]
                 + 0.14 * suitability_mean
@@ -1747,10 +1800,52 @@ def optimize_inhibitor_combinations(
                 - 0.22 * control_penalty
                 - 0.16 * _num(t.get("uncertainty_penalty", 0.3), 0.3)
             )
+            identity_payload = {
+                "identity_resolution_level": t.get("identity_resolution_level"),
+                "family_validation_status": t.get("family_validation_status"),
+                "source_dataset_family_conflict": t.get("source_dataset_family_conflict", False),
+                "source_dataset_family_validation_status": t.get("source_dataset_family_validation_status"),
+            }
+            atlas_payload = {
+                "target_match_status": t.get("target_match_status"),
+                "mapping_level": t.get("mapping_level"),
+            }
+            state_payload = {
+                "kinetic_evidence": t.get("kinetic_evidence_score"),
+                "structure_evidence": t.get("structure_score"),
+                "plant_context": t.get("plant_context_score"),
+                "uncertainty_penalty": t.get("uncertainty_penalty"),
+            }
+            scientific_priority = evidence_adjusted_assay_priority(
+                simulation={"status": "available", "simulated_max_inhibition": combined},
+                identity=identity_payload,
+                target_atlas=atlas_payload,
+                state_signals=state_payload,
+                # Typed pairing features are generated model evidence. They are
+                # not promoted to measured compound-target evidence.
+                compound_target_evidence_tier="model_inference",
+            )
+            readiness_score = _num(scientific_priority.get("scientific_priority_score"), 0.0)
+            # Preserve mechanistic score, but penalize weak identity/evidence so
+            # high model response cannot dominate the final portfolio by itself.
+            objective = float(objective_raw - 0.18 * (1.0 - readiness_score))
 
             rows.append({
                 "target_enzyme": t.get("enzyme_name"),
                 "target_family": t.get("enzyme_family"),
+                "target_canonical_id": t.get("enzyme_canonical_id"),
+                "target_name_canonical": t.get("enzyme_name_canonical"),
+                "target_family_canonical": t.get("enzyme_family_canonical"),
+                "target_name_reported": t.get("enzyme_name_reported"),
+                "target_family_reported": t.get("enzyme_family_reported"),
+                "identity_resolution_level": t.get("identity_resolution_level"),
+                "identity_match_confidence": t.get("identity_match_confidence"),
+                "family_validation_status": t.get("family_validation_status"),
+                "family_validation_reason": t.get("family_validation_reason"),
+                "source_dataset_family_validation_status": t.get("source_dataset_family_validation_status"),
+                "source_dataset_family_conflict": t.get("source_dataset_family_conflict", False),
+                "source_dataset_family_reason": t.get("source_dataset_family_reason"),
+                "source_evidence": t.get("source_evidence") or t.get("source_resource"),
                 "stage": t.get("stage_assigned"),
                 "critical_transition_score": t.get("critical_transition_score"),
                 "herbicide_target_family": t.get("herbicide_target_family"),
@@ -1758,11 +1853,33 @@ def optimize_inhibitor_combinations(
                 "wssa_group": t.get("wssa_group"),
                 "known_inhibitor_classes": t.get("known_inhibitor_classes"),
                 "resistance_risks": t.get("resistance_risks"),
-                "scenario_selectivity_margin": scenario_selectivity,
+                "scenario_selectivity_margin": t.get("scenario_selectivity_margin"),
+                "scenario_selectivity_index": scenario_selectivity,
+                "selectivity_scope": t.get("selectivity_scope", "scenario_level"),
+                "selectivity_scope_label": t.get("selectivity_scope_label", "Scenario-level baseline applied to this target context"),
+                "selectivity_scope_reason": t.get("selectivity_scope_reason"),
+                "target_specific_evidence_present": t.get("target_specific_evidence_present", False),
+                "target_specific_inputs": t.get("target_specific_inputs", ""),
                 "weed_vulnerability_score": t.get("weed_vulnerability_score"),
                 "crop_vulnerability_score": t.get("crop_vulnerability_score"),
                 "compound_a": a.get("compound_name"),
                 "compound_b": b.get("compound_name"),
+                "compound_a_canonical_id": a.get("canonical_compound_id"),
+                "compound_b_canonical_id": b.get("canonical_compound_id"),
+                "compound_a_inchikey": a.get("inchikey"),
+                "compound_b_inchikey": b.get("inchikey"),
+                "compound_a_canonical_smiles": a.get("canonical_smiles"),
+                "compound_b_canonical_smiles": b.get("canonical_smiles"),
+                "compound_a_identity_level": a.get("compound_identity_level"),
+                "compound_b_identity_level": b.get("compound_identity_level"),
+                "compound_a_structure_backed": a.get("structure_backed_identity"),
+                "compound_b_structure_backed": b.get("structure_backed_identity"),
+                "canonical_pair_key": canonical_compound_pair_key(
+                    a.get("canonical_compound_id") or a.get("compound_name"),
+                    b.get("canonical_compound_id") or b.get("compound_name"),
+                    compound_a_name=a.get("compound_name"),
+                    compound_b_name=b.get("compound_name"),
+                ),
                 "compound_a_source": a.get("source_resource"),
                 "compound_b_source": b.get("source_resource"),
                 "compound_a_priority_class": a.get("compound_priority_class"),
@@ -1807,7 +1924,14 @@ def optimize_inhibitor_combinations(
                 "environmental_persistence_proxy": env_persist,
                 "toxicity_hazard_proxy": hazard,
                 "control_compound_penalty": control_penalty,
+                "optimization_objective_raw": objective_raw,
                 "optimization_objective": objective,
+                "evidence_adjusted_priority": scientific_priority.get("scientific_priority"),
+                "evidence_adjusted_priority_code": scientific_priority.get("scientific_priority_code"),
+                "evidence_adjusted_priority_score": scientific_priority.get("scientific_priority_score"),
+                "simulation_derived_response_rank": scientific_priority.get("simulation_priority"),
+                "scientific_priority_gating_reasons": ";".join(scientific_priority.get("gating_reasons") or []),
+                "scientific_priority_supporting_factors": ";".join(scientific_priority.get("supporting_factors") or []),
                 "functional_silencing_threshold": 0.72,
                 "meets_functional_silencing_proxy": combined >= 0.72,
                 "evidence_class": "model_inference_with_real_compound_and_target_rule_evidence",
@@ -1820,8 +1944,7 @@ def optimize_inhibitor_combinations(
 
     scored = pd.DataFrame(rows)
     intervention_dedupe_keys: list[str] = [
-        "target_enzyme_canonical",
-        "target_family_canonical",
+        "target_canonical_id",
         "stage_canonical",
         "compound_pair_canonical",
     ]
@@ -1847,6 +1970,7 @@ def optimize_inhibitor_combinations(
         out = out.drop(
             columns=[
                 c for c in [
+                    "target_identity_key",
                     "target_enzyme_canonical",
                     "target_family_canonical",
                     "stage_canonical",
@@ -1884,7 +2008,7 @@ def optimize_inhibitor_combinations(
         "epsilon_threshold": epsilon,
         "objective": (
             "maximize predicted enzyme-state perturbation and typed inhibit-synergy while penalizing crop impact, "
-            "persistence, hazard, generic controls, reactive aldehydes, and uncertainty"
+            "persistence, hazard, generic controls, reactive aldehydes, uncertainty, and weak identity/evidence readiness"
         ),
         "evidence_class": "model_inference_with_real_evidence_inputs",
         "unsupported_assumption_warning": (
@@ -1916,6 +2040,9 @@ def pseudo_lab_simulations(optimized: pd.DataFrame, out_dir: Path, n_targets: in
                 "stage": r.get("stage"),
                 "compound_a": r.get("compound_a"),
                 "compound_b": r.get("compound_b"),
+                "compound_a_canonical_id": r.get("compound_a_canonical_id"),
+                "compound_b_canonical_id": r.get("compound_b_canonical_id"),
+                "canonical_pair_key": r.get("canonical_pair_key"),
                 "dose_relative": d,
                 "predicted_inhibition": inhibition,
                 "weed_activity_remaining": weed_activity_remaining,

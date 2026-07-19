@@ -1,0 +1,40 @@
+{
+  "release": "0.6.0",
+  "registry_version": "2026.07.17-v1",
+  "validation_date": "2026-07-17",
+  "checks": {
+    "python_compile": "passed",
+    "tests_collected": 48,
+    "tests_passed_in_isolated_chunks": 48,
+    "strict_json_full_report": "passed",
+    "canonical_synonym_consolidation": "passed",
+    "enzyme_family_conflict_correction": "passed",
+    "dynamic_cazy_idempotence": "passed",
+    "scenario_vs_target_selectivity_scope": "passed",
+    "evidence_adjusted_assay_priority": "passed",
+    "fooddb_zero_result_semantics": "passed",
+    "canonical_unordered_pair_provenance": "passed",
+    "target_atlas_exact_identity_gating": "passed",
+    "wheel_build": "passed (pip wheel --no-deps)",
+    "wheel_artifact": "pesi_v2-0.6.0-py3-none-any.whl"
+  },
+  "test_chunks": [
+    {
+      "scope": "API, identity, evidence, FoodDB, target atlas, ranking, report",
+      "passed": 38
+    },
+    {
+      "scope": "full-report JSON and DeepSeek runtime safety",
+      "passed": 4
+    },
+    {
+      "scope": "semantic, selectivity, smoke, synergy",
+      "passed": 6
+    }
+  ],
+  "notes": [
+    "Tests were executed in isolated chunks because the complete single-process suite exhibited an existing TestClient/session-order timeout after the earlier tests had completed.",
+    "No raw FoodDB dataset or model-provider secret is included in the release archives.",
+    "The canonical identity registry is scope-bounded and does not replace authoritative enzyme databases."
+  ]
+}

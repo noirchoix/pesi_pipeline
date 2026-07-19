@@ -1,0 +1,16 @@
+{
+  "release": "0.5.2",
+  "scope": "scientific semantic validation layer",
+  "validation": {
+    "python_compile": "passed",
+    "focused_semantic_tests": {"passed": 14, "failed": 0},
+    "full_suite_with_fooddb_bundle": {"passed": 31, "failed": 0},
+    "strict_json_serialization": "passed",
+    "full_report_generation": "passed",
+    "fooddb_unmatched_normalization": "passed",
+    "selectivity_difference_consistency": "passed",
+    "unvalidated_target_atlas_inhibitor_suppression": "passed",
+    "deepseek_contradiction_correction_mock": "passed"
+  },
+  "scientific_boundary": "Computational screening outputs remain hypotheses requiring enzyme assays, comparative crop/weed testing, toxicity review, environmental assessment, and source-extractability validation."
+}

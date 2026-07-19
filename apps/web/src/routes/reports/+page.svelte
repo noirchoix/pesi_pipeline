@@ -45,7 +45,9 @@
     }
   }
 
-  onMount(generate);
+  onMount(() => {
+    runId = activeRunId();
+  });
 </script>
 
 <div class="page">
@@ -70,6 +72,13 @@
       </div>
     </div>
   </section>
+
+  {#if !report && !loading}
+    <section class="notice compact section">
+      <strong>No report generated yet</strong>
+      <p>Choose a report depth and click Generate report. The request starts only after this page has mounted in the browser.</p>
+    </section>
+  {/if}
 
   {#if report}
     <section class="panel section report-readable">

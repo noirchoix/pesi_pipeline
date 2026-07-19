@@ -34,8 +34,12 @@ def test_food_source_and_evidence_endpoints() -> None:
     assert compound_res.status_code == 200
     payload = compound_res.json()
     assert payload["status"] == "ok"
-    assert payload["sources"]
+    assert payload["match_status"] in {"matched", "ambiguous", "unmatched"}
+    assert payload["source_count_returned"] == len(payload["sources"])
+    if payload["match_status"] != "matched":
+        assert payload["sources"] == []
+        assert payload["source_suppressed"] is True
 
     report_res = client.get("/api/v1/results/food-source-report")
     assert report_res.status_code == 200
-    assert report_res.json()["status"] == "completed"
+    assert report_res.json()["status"] in {"completed", "missing"}

@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from pesi.domain.compound_rules import canonicalize_compound_pair, canonicalize_text_key
+from pesi.domain.enzyme_identity import resolve_enzyme_identity
 
 
 def _safe_read_csv(path: Path) -> pd.DataFrame:
@@ -166,8 +167,21 @@ def evaluate_outputs(out_dir: str | Path = "outputs", artifact_dir: str | Path =
     if len(optimized):
         opt = optimized.copy()
         opt["pair_key"] = opt.apply(lambda r: "||".join(canonicalize_compound_pair(r.get("compound_a"), r.get("compound_b"))), axis=1)
-        opt["target_key"] = opt.get("target_enzyme", pd.Series([""] * len(opt))).map(canonicalize_text_key)
-        opt["target_family_key"] = opt.get("target_family", pd.Series([""] * len(opt))).map(canonicalize_text_key)
+
+        def _target_identity_key(row: pd.Series) -> str:
+            existing = str(row.get("target_canonical_id") or row.get("enzyme_canonical_id") or "").strip()
+            if existing:
+                return existing
+            return str(resolve_enzyme_identity(row.get("target_enzyme"), row.get("target_family"))["canonical_id"])
+
+        def _target_family_key(row: pd.Series) -> str:
+            existing = str(row.get("target_family_canonical") or "").strip()
+            if existing:
+                return canonicalize_text_key(existing)
+            return canonicalize_text_key(resolve_enzyme_identity(row.get("target_enzyme"), row.get("target_family"))["canonical_family"])
+
+        opt["target_key"] = opt.apply(_target_identity_key, axis=1)
+        opt["target_family_key"] = opt.apply(_target_family_key, axis=1)
         opt["stage_key"] = opt.get("stage", pd.Series([""] * len(opt))).map(canonicalize_text_key)
         opt["compound_a_key"] = opt.get("compound_a", pd.Series([""] * len(opt))).map(canonicalize_text_key)
         opt["compound_b_key"] = opt.get("compound_b", pd.Series([""] * len(opt))).map(canonicalize_text_key)

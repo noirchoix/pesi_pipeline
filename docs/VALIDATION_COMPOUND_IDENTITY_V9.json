@@ -1,0 +1,46 @@
+{
+  "release": "0.7.0",
+  "validation_date": "2026-07-19",
+  "scope": [
+    "structure-backed canonical compound identity",
+    "compound-specific FoodDB joins",
+    "unmatched source suppression",
+    "row-level semantic invariants",
+    "source-dataset family-conflict tracking",
+    "executive-summary consistency"
+  ],
+  "results": {
+    "python_compile": "passed",
+    "focused_scientific_tests": {
+      "status": "passed",
+      "count": 6,
+      "scope": "tests/test_compound_identity_fooddb_invariants.py"
+    },
+    "isolated_non_raw_test_chunks": {
+      "status": "passed",
+      "count": 52
+    },
+    "total_collected_tests": 54,
+    "raw_fooddb_dependent_tests": {
+      "status": "not_executed_successfully_in_packaging_environment",
+      "count": 2,
+      "reason": "raw/food_chemistry was not included in the supplied v8 repository archive",
+      "tests": [
+        "test_food_chemistry_bundle_is_discovered",
+        "test_fooddb_identifier_mapping_and_occurrence_sources"
+      ]
+    },
+    "strict_json_report_serialization": "passed",
+    "partner_source_leakage_fixture": "passed",
+    "unmatched_source_suppression": "passed",
+    "shared_occurrence_suppression": "passed",
+    "invalid_smiles_structure_identity_gate": "passed",
+    "source_dataset_family_conflict_penalty": "passed",
+    "executive_consistency_gate": "passed",
+    "temporary_duckdb_compound_ownership_integration": "passed",
+    "legacy_fooddb_kg_schema_normalization": "passed",
+    "wheel_build": "passed",
+    "wheel_filename": "pesi_v2-0.7.0-py3-none-any.whl"
+  },
+  "scientific_boundary": "Validation establishes software invariants and provenance discipline, not biological efficacy, safety, or field readiness."
+}

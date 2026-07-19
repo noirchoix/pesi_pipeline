@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 
 from pesi.domain.compound_rules import canonicalize_text_key
+from pesi.domain.enzyme_identity import resolve_enzyme_identity
 
 
 @dataclass(frozen=True)
@@ -37,7 +38,7 @@ HERBICIDE_TARGET_RULES: tuple[HerbicideTargetRule, ...] = (
     HerbicideTargetRule(
         target_family="ACCase",
         site_of_action="acetyl-CoA carboxylase",
-        target_patterns=("accase", "acetyl coa carboxylase", "acetyl-coa carboxylase", "carboxylase"),
+        target_patterns=("accase", "acetyl coa carboxylase", "acetyl-coa carboxylase"),
         wssa_group="1",
         pathway="fatty_acid_biosynthesis",
         known_inhibitor_classes=("aryloxyphenoxypropionates/fops", "cyclohexanediones/dims", "phenylpyrazolines/dens"),
@@ -61,7 +62,7 @@ HERBICIDE_TARGET_RULES: tuple[HerbicideTargetRule, ...] = (
     HerbicideTargetRule(
         target_family="EPSPS",
         site_of_action="5-enolpyruvylshikimate-3-phosphate synthase",
-        target_patterns=("epsp", "epsps", "shikimate", "5-enolpyruvylshikimate"),
+        target_patterns=("epsp synthase", "epsps", "5-enolpyruvylshikimate-3-phosphate synthase"),
         wssa_group="9",
         pathway="shikimate_aromatic_amino_acid_biosynthesis",
         known_inhibitor_classes=("glyphosate-like phosphonate transition-state/substrate mimics",),
@@ -97,7 +98,7 @@ HERBICIDE_TARGET_RULES: tuple[HerbicideTargetRule, ...] = (
     HerbicideTargetRule(
         target_family="PSII",
         site_of_action="photosystem II electron transport, QB binding protein/site",
-        target_patterns=("photosystem ii", "psii", "qb binding", "d1 protein", "photosynthesis"),
+        target_patterns=("photosystem ii", "psii", "qb binding", "d1 protein"),
         wssa_group="5/6/7",
         pathway="photosynthetic_electron_transport",
         known_inhibitor_classes=("triazines", "ureas", "nitriles", "benzothiadiazinones", "phenylcarbamates"),
@@ -109,7 +110,7 @@ HERBICIDE_TARGET_RULES: tuple[HerbicideTargetRule, ...] = (
     HerbicideTargetRule(
         target_family="PSI",
         site_of_action="photosystem I electron diversion",
-        target_patterns=("photosystem i", "psi", "ferredoxin", "electron diverter"),
+        target_patterns=("photosystem i", "psi", "electron diverter"),
         wssa_group="22",
         pathway="photosynthetic_electron_transport",
         known_inhibitor_classes=("bipyridyliums", "paraquat/diquat-like redox cyclers"),
@@ -121,7 +122,7 @@ HERBICIDE_TARGET_RULES: tuple[HerbicideTargetRule, ...] = (
     HerbicideTargetRule(
         target_family="Tubulin/microtubule",
         site_of_action="microtubule assembly / tubulin polymerization",
-        target_patterns=("tubulin", "microtubule", "cell division", "mitosis"),
+        target_patterns=("tubulin", "microtubule", "tubulin polymerization"),
         wssa_group="3",
         pathway="cell_division",
         known_inhibitor_classes=("dinitroanilines",),
@@ -146,13 +147,14 @@ HERBICIDE_TARGET_RULES: tuple[HerbicideTargetRule, ...] = (
         target_family="CAZy/cell wall",
         site_of_action="cell wall carbohydrate metabolism / cellulose-associated enzymes",
         target_patterns=("cellulase", "cellulose", "glycoside hydrolase", "cazy", "glucan", "cell wall"),
-        wssa_group="20/unknown",
+        wssa_group="unmapped",
         pathway="cell_wall_biosynthesis_and_remodeling",
-        known_inhibitor_classes=("cell_wall_synthesis_inhibitors", "glycosidase_inhibitor_like"),
-        binding_logic="substrate_cleft_or_tunnel_binding_in_cell_wall_remodeling_enzymes",
+        known_inhibitor_classes=(),
+        binding_logic="broad_family_process_context_only_no_target_specific_binding_claim",
         active_stages=("germination", "cell_wall_secondary_growth", "seedling_emergence"),
         selectivity_mechanisms=("growth_stage", "cell_wall_flux", "tissue_access"),
         resistance_risks=("pathway_bypass", "reduced_uptake"),
+        evidence_class="family_process_context",
     ),
     HerbicideTargetRule(
         target_family="CYP450 detoxification",
@@ -200,46 +202,107 @@ def export_reference_csv(path: Path) -> None:
         writer.writerows(rows)
 
 
+TARGET_IDENTITY_ALIASES: dict[str, tuple[str, ...]] = {
+    "ACCase": ("EC:6.4.1.2",),
+    "ALS/AHAS": ("EC:2.2.1.6",),
+    "EPSPS": ("EC:2.5.1.19",),
+    "PPO": ("EC:1.3.3.4",),
+    "PSII": ("PESI:PSII_TARGET",),
+}
+
+
+def _identity_text(value: Any) -> str:
+    text = str(value or "").casefold().replace("α", "alpha").replace("β", "beta")
+    return re.sub(r"[^a-z0-9]+", " ", text).strip()
+
+
 def match_herbicide_targets(enzyme_name: Any, enzyme_family: Any = "", stage: Any = "") -> dict[str, Any]:
-    text = f"{enzyme_name or ''} {enzyme_family or ''}".lower()
-    canon = canonicalize_text_key(text)
-    best: HerbicideTargetRule | None = None
-    best_score = 0.0
-    hits: list[str] = []
-    for rule in HERBICIDE_TARGET_RULES:
-        score = 0.0
-        for pat in rule.target_patterns:
-            p = canonicalize_text_key(pat)
-            if p and p in canon:
-                score += 0.55
-                hits.append(pat)
-        if canonicalize_text_key(rule.target_family) in canonicalize_text_key(str(enzyme_family)):
-            score += 0.35
-        if stage and str(stage) in rule.active_stages:
-            score += 0.10
-        score = float(np.clip(score, 0, 1))
-        if score > best_score:
-            best_score = score
-            best = rule
-    if best is None:
+    """Return target-atlas context only at the identity resolution supported.
+
+    Exact enzyme/target identities may receive a target-specific site-of-action
+    annotation. Broad activity or family labels can receive process context but
+    never a target-specific inhibitor-class claim. Stage and pathway words
+    cannot create or rescue a mapping.
+    """
+
+    identity = resolve_enzyme_identity(enzyme_name, enzyme_family)
+    stage_text = re.sub(r"[^a-z0-9]+", "_", str(stage or "").casefold()).strip("_")
+    canonical_id = str(identity.get("canonical_id") or "")
+    registry_target_family = identity.get("herbicide_target_family")
+
+    exact_rule: HerbicideTargetRule | None = None
+    if registry_target_family:
+        exact_rule = next((rule for rule in HERBICIDE_TARGET_RULES if rule.target_family == registry_target_family), None)
+
+    if exact_rule is not None and identity.get("identity_resolution_level") in {"exact_enzyme", "exact_target"}:
+        stage_compatible = bool(stage_text and stage_text in exact_rule.active_stages)
+        reasons = [
+            "Canonical enzyme/target identity maps to a curated target-atlas entry.",
+            f"Canonical identity: {canonical_id}.",
+        ]
+        if stage_compatible:
+            reasons.append("Growth stage is compatible with the curated target rule; stage did not determine the identity match.")
         return {
-            "herbicide_target_family": "unmapped",
-            "herbicide_site_of_action": "unmapped",
-            "herbicide_target_score": 0.0,
+            "herbicide_target_family": exact_rule.target_family,
+            "herbicide_site_of_action": exact_rule.site_of_action,
+            "herbicide_target_score": 1.0,
+            "known_inhibitor_classes": ";".join(exact_rule.known_inhibitor_classes),
+            "wssa_group": exact_rule.wssa_group,
+            "resistance_risks": ";".join(exact_rule.resistance_risks),
+            "selectivity_mechanisms": ";".join(exact_rule.selectivity_mechanisms),
+            "binding_logic": exact_rule.binding_logic,
+            "target_rule_evidence_class": "curated_target_identity_rule",
+            "target_match_status": "validated",
+            "target_match_basis": "canonical_identity_registry",
+            "target_match_alias": identity.get("identity_matched_alias") or "",
+            "target_match_confidence": identity.get("identity_match_confidence") or 0.0,
+            "target_match_reasons": "; ".join(reasons),
+            "stage_compatible": stage_compatible,
+            "mapping_level": "target_specific",
+            "enzyme_identity": identity,
+        }
+
+    # Broad cellulose-active labels are retained only as process/family context.
+    # They do not receive WSSA group or inhibitor-class annotations because
+    # 'cellulase' and CAZy family labels are not exact herbicide target identities.
+    if identity.get("canonical_id") == "PESI:ACTIVITY_CELLULASE" or str(identity.get("canonical_id", "")).startswith("CAZY:"):
+        return {
+            "herbicide_target_family": "CAZy/cell wall context",
+            "herbicide_site_of_action": "broad cellulose/carbohydrate-active process context",
+            "herbicide_target_score": 0.30,
             "known_inhibitor_classes": "",
             "wssa_group": "unmapped",
             "resistance_risks": "",
             "selectivity_mechanisms": "",
-            "target_rule_evidence_class": "unmapped_model_inference",
+            "binding_logic": "",
+            "target_rule_evidence_class": "curated_family_process_context",
+            "target_match_status": "family_context",
+            "target_match_basis": "broad_function_or_cazy_family",
+            "target_match_alias": identity.get("identity_matched_alias") or "",
+            "target_match_confidence": min(float(identity.get("identity_match_confidence") or 0.0), 0.70),
+            "target_match_reasons": "A broad carbohydrate-active family or activity was resolved, but no exact herbicide target identity was established.",
+            "stage_compatible": False,
+            "mapping_level": "family_or_process_context",
+            "enzyme_identity": identity,
         }
+
     return {
-        "herbicide_target_family": best.target_family,
-        "herbicide_site_of_action": best.site_of_action,
-        "herbicide_target_score": best_score,
-        "known_inhibitor_classes": ";".join(best.known_inhibitor_classes),
-        "wssa_group": best.wssa_group,
-        "resistance_risks": ";".join(best.resistance_risks),
-        "selectivity_mechanisms": ";".join(best.selectivity_mechanisms),
-        "binding_logic": best.binding_logic,
-        "target_rule_evidence_class": best.evidence_class if best_score > 0 else "unmapped_model_inference",
+        "herbicide_target_family": "unmapped",
+        "herbicide_site_of_action": "unmapped",
+        "herbicide_target_score": 0.0,
+        "known_inhibitor_classes": "",
+        "wssa_group": "unmapped",
+        "resistance_risks": "",
+        "selectivity_mechanisms": "",
+        "binding_logic": "",
+        "target_rule_evidence_class": "unmapped",
+        "target_match_status": "unmapped",
+        "target_match_basis": "no_validated_target_identity",
+        "target_match_alias": "",
+        "target_match_confidence": 0.0,
+        "target_match_reasons": "No exact canonical herbicide-target identity was resolved.",
+        "stage_compatible": False,
+        "mapping_level": "unmapped",
+        "enzyme_identity": identity,
     }
+

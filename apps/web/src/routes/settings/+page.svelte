@@ -5,6 +5,7 @@
   let health: Record<string, unknown> | null = null;
   let error = '';
   let runId = '';
+  $: ai = (health?.ai as Record<string, unknown> | undefined) ?? {};
 
   onMount(async () => {
     runId = activeRunId();
@@ -29,6 +30,9 @@
       <p class="muted">Service: {health?.service ?? '—'}</p>
       <p class="muted">Version: {health?.version ?? '—'}</p>
       <p class="muted small">Active run: <span class="mono">{runId || 'none selected'}</span></p>
+      <p class="muted small">AI status: <strong>{ai.status ?? 'not checked'}</strong></p>
+      <p class="muted small">AI model: <span class="mono">{ai.model ?? '—'}</span></p>
+      {#if ai.env_file_loaded}<p class="muted small">Environment loaded: <span class="mono">{ai.env_file_loaded}</span></p>{/if}
     </div>
     <div class="panel">
       <span class="kicker">AI explanation</span>

@@ -1,0 +1,32 @@
+{
+  "release": "0.7.0",
+  "patch_name": "compound_identity_fooddb_scientific_invariants_v9",
+  "base_release": "0.6.0",
+  "created": "2026-07-19",
+  "requires_analysis_regeneration": true,
+  "scientific_scope": [
+    "compound-specific FoodDB joins",
+    "unmatched-compound source suppression",
+    "row-level semantic invariant validation",
+    "structure-backed canonical compound IDs",
+    "source-dataset family-conflict tracking",
+    "executive-summary consistency checks"
+  ],
+  "secrets_included": false,
+  "raw_datasets_included": false,
+  "run_outputs_in_overlay": false,
+  "recommended_artifact": "overlay_patch",
+  "validation": {
+    "total_tests_collected": 54,
+    "non_raw_tests_passed": 52,
+    "raw_fooddb_tests_not_runnable_without_bundle": 2,
+    "temporary_duckdb_ownership_integration": "passed",
+    "wheel_build": "passed"
+  },
+  "changed_test_files": [
+    "tests/test_compound_identity_fooddb_invariants.py",
+    "tests/test_food_evidence_api.py",
+    "tests/test_identity_aware_ranking.py",
+    "tests/test_report_interpreter.py"
+  ]
+}

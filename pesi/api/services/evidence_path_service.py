@@ -10,6 +10,17 @@ import pandas as pd
 from pesi.api.config import ApiSettings
 from pesi.api.services.artifact_reader import ArtifactReader
 from pesi.domain.herbicide_targets import HERBICIDE_TARGET_RULES, match_herbicide_targets
+from pesi.domain.compound_rules import canonicalize_compound_pair, canonicalize_text_key
+from pesi.domain.compound_identity import canonical_compound_identity, canonical_compound_pair_key
+from pesi.domain.enzyme_identity import resolve_enzyme_identity
+from pesi.domain.scientific_semantics import (
+    classify_evidence_source,
+    classify_selectivity_scope,
+    evidence_adjusted_assay_priority,
+    evidence_tier_label,
+    fooddb_zero_result_semantics,
+    normalize_selectivity,
+)
 from pesi.etl.fooddb_loader import FOOD_SOURCE_CAVEAT
 
 
@@ -35,6 +46,20 @@ def _num(value: Any, digits: int = 3) -> float | None:
         return None if pd.isna(out) else round(out, digits)
     except Exception:
         return None
+
+
+def _first_present(*values: Any) -> Any:
+    """Return the first non-null value without treating numeric zero as missing."""
+    for value in values:
+        if value is None:
+            continue
+        try:
+            if pd.isna(value):
+                continue
+        except Exception:
+            pass
+        return value
+    return None
 
 
 def _split(value: Any) -> list[str]:
@@ -70,6 +95,16 @@ def _json_list(value: Any) -> list[dict[str, Any]]:
         return parsed if isinstance(parsed, list) else []
     except Exception:
         return []
+
+
+def _canonical_pair_values(a: Any, b: Any) -> tuple[str, str, str]:
+    left, right = canonicalize_compound_pair(a, b)
+    display = sorted([str(a or "").strip(), str(b or "").strip()], key=canonicalize_text_key)
+    return left, right, " + ".join(display)
+
+
+def _identity_id(name: Any, family: Any = "") -> str:
+    return str(resolve_enzyme_identity(name, family).get("canonical_id") or "")
 
 
 class EvidencePathService:
@@ -130,6 +165,10 @@ class EvidencePathService:
         if df.empty:
             return {}
         key = _norm(target)
+        wanted_id = _identity_id(target)
+        canonical = df[df.apply(lambda r: _identity_id(r.get("enzyme_name") or r.get("target_enzyme"), r.get("enzyme_family") or r.get("target_family")) == wanted_id, axis=1)]
+        if not canonical.empty:
+            return canonical.iloc[0].to_dict()
         exact = df[df.apply(lambda r: _norm(r.get("enzyme_name") or r.get("target_enzyme")) == key, axis=1)]
         if not exact.empty:
             return exact.iloc[0].to_dict()
@@ -141,6 +180,10 @@ class EvidencePathService:
         if df.empty:
             return {}
         key = _norm(target)
+        wanted_id = _identity_id(target)
+        canonical = df[df.apply(lambda r: _identity_id(r.get("enzyme_name") or r.get("enzyme_key"), r.get("enzyme_family")) == wanted_id, axis=1)]
+        if not canonical.empty:
+            return canonical.sort_values("criticality_score_formula", ascending=False).iloc[0].to_dict()
         exact = df[df.apply(lambda r: _norm(r.get("enzyme_name") or r.get("enzyme_key")) == key, axis=1)]
         if not exact.empty:
             return exact.sort_values("criticality_score_formula", ascending=False).iloc[0].to_dict()
@@ -152,6 +195,10 @@ class EvidencePathService:
         if df.empty:
             return {}
         key = _norm(target)
+        wanted_id = _identity_id(target)
+        canonical = df[df.apply(lambda r: _identity_id(r.get("enzyme_name"), r.get("enzyme_family")) == wanted_id, axis=1)]
+        if not canonical.empty:
+            return canonical.iloc[0].to_dict()
         exact = df[df.apply(lambda r: _norm(r.get("enzyme_name")) == key, axis=1)]
         return exact.iloc[0].to_dict() if not exact.empty else {}
 
@@ -167,37 +214,119 @@ class EvidencePathService:
                 return row
         return {}
 
-    def _compound_row(self, compound: str, out_dir: str | Path | None) -> dict[str, Any]:
+    def _compound_row(
+        self,
+        compound: str,
+        out_dir: str | Path | None,
+        canonical_id: str | None = None,
+    ) -> dict[str, Any]:
         df = self._df("compound-pool", out_dir)
         if df.empty:
             return {}
+        wanted_id = str(canonical_id or "").strip()
+        if wanted_id and "canonical_compound_id" in df.columns:
+            selected = df[df["canonical_compound_id"].astype(str).eq(wanted_id)]
+            if not selected.empty:
+                return selected.iloc[0].to_dict()
         key = _norm(compound)
-        exact = df[df.apply(lambda r: key in {_norm(r.get("compound_name")), _norm(r.get("compound_name_canonical")), _norm(r.get("compound_id"))}, axis=1)]
-        return exact.iloc[0].to_dict() if not exact.empty else {}
+        exact = df[df.apply(
+            lambda r: key in {
+                _norm(r.get("compound_name")),
+                _norm(r.get("compound_name_canonical")),
+                _norm(r.get("compound_id")),
+            },
+            axis=1,
+        )]
+        if exact.empty:
+            return {}
+        if "canonical_compound_id" in exact.columns:
+            identities = [str(x) for x in exact["canonical_compound_id"].dropna().astype(str).unique() if str(x).strip()]
+            if len(identities) > 1:
+                return {
+                    "compound_name": compound,
+                    "compound_identity_status": "ambiguous_name_collision",
+                    "candidate_canonical_ids": identities,
+                }
+        return exact.iloc[0].to_dict()
 
-    def _food_context(self, a: str, b: str, out_dir: str | Path | None) -> dict[str, Any]:
+    def _food_context(
+        self,
+        a: str,
+        b: str,
+        out_dir: str | Path | None,
+        *,
+        compound_a_canonical_id: str | None = None,
+        compound_b_canonical_id: str | None = None,
+    ) -> dict[str, Any]:
         df = self._df("pair-food-context", out_dir)
-        pair_key = "||".join(sorted([a, b]))
+        a_row = self._compound_row(a, out_dir, compound_a_canonical_id)
+        b_row = self._compound_row(b, out_dir, compound_b_canonical_id)
+        a_id = str(compound_a_canonical_id or a_row.get("canonical_compound_id") or "").strip()
+        b_id = str(compound_b_canonical_id or b_row.get("canonical_compound_id") or "").strip()
+        pair_key = canonical_compound_pair_key(
+            a_id or a,
+            b_id or b,
+            compound_a_name=a,
+            compound_b_name=b,
+        )
         if not df.empty and "pair_key" in df.columns:
-            row = df[df["pair_key"].astype(str) == pair_key]
+            row = df[df["pair_key"].astype(str).eq(pair_key)]
             if row.empty:
+                # Backward-compatible fallback is permitted only when the name pair
+                # resolves to a single context row. Multiple rows are ambiguous.
                 wanted = {_norm(a), _norm(b)}
-                row = df[df.apply(lambda r: {_norm(r.get("compound_a")), _norm(r.get("compound_b"))} == wanted, axis=1)]
+                candidates = df[df.apply(
+                    lambda r: {_norm(r.get("compound_a")), _norm(r.get("compound_b"))} == wanted,
+                    axis=1,
+                )]
+                if len(candidates) == 1:
+                    row = candidates
             if not row.empty:
                 item = row.iloc[0].to_dict()
+                left_id = str(item.get("compound_a_canonical_id") or "").strip()
+                right_id = str(item.get("compound_b_canonical_id") or "").strip()
+                # Align source arrays to the requested compound identities, not to
+                # display order. This prevents partner-source leakage.
+                left_sources = _json_list(item.get("compound_a_sources_json"))
+                right_sources = _json_list(item.get("compound_b_sources_json"))
+                if a_id and a_id == right_id and b_id == left_id:
+                    a_sources, b_sources = right_sources, left_sources
+                    a_match = item.get("compound_b_match_status")
+                    b_match = item.get("compound_a_match_status")
+                else:
+                    a_sources, b_sources = left_sources, right_sources
+                    a_match = item.get("compound_a_match_status")
+                    b_match = item.get("compound_b_match_status")
+                if str(a_match or "").casefold() != "matched":
+                    a_sources = []
+                if str(b_match or "").casefold() != "matched":
+                    b_sources = []
+                shared_sources = _json_list(item.get("shared_foods_json"))
+                if str(a_match or "").casefold() != "matched" or str(b_match or "").casefold() != "matched":
+                    shared_sources = []
                 return {
                     "status": item.get("source_context_status"),
-                    "shared_food_count": int(item.get("shared_food_count") or 0),
-                    "shared_quantified_food_count": int(item.get("shared_quantified_food_count") or 0),
-                    "shared_source_confidence": _num(item.get("shared_source_confidence")),
-                    "shared_sources": _json_list(item.get("shared_foods_json")),
-                    "compound_a_sources": _json_list(item.get("compound_a_sources_json")),
-                    "compound_b_sources": _json_list(item.get("compound_b_sources_json")),
+                    "pair_key": item.get("pair_key"),
+                    "compound_a_canonical_id": a_id or left_id,
+                    "compound_b_canonical_id": b_id or right_id,
+                    "compound_a_match_status": str(a_match or "unmatched").casefold(),
+                    "compound_b_match_status": str(b_match or "unmatched").casefold(),
+                    "shared_food_count": len(shared_sources),
+                    "shared_quantified_food_count": int(item.get("shared_quantified_food_count") or 0) if shared_sources else 0,
+                    "shared_source_confidence": _num(item.get("shared_source_confidence")) if shared_sources else None,
+                    "shared_sources": shared_sources,
+                    "compound_a_sources": a_sources,
+                    "compound_b_sources": b_sources,
                     "evidence_class": item.get("evidence_class"),
                     "caveat": FOOD_SOURCE_CAVEAT,
                 }
         return {
             "status": "not_available",
+            "pair_key": pair_key,
+            "compound_a_canonical_id": a_id or None,
+            "compound_b_canonical_id": b_id or None,
+            "compound_a_match_status": "unmatched",
+            "compound_b_match_status": "unmatched",
             "shared_food_count": 0,
             "shared_quantified_food_count": 0,
             "shared_source_confidence": None,
@@ -214,8 +343,9 @@ class EvidencePathService:
             return {"status": "not_available", "evidence_class": "pseudo_lab_model_inference"}
         wanted = {_norm(a), _norm(b)}
         target_key = _norm(target)
+        target_id = _identity_id(target)
         subset = df[df.apply(
-            lambda r: _norm(r.get("target_enzyme")) == target_key
+            lambda r: _identity_id(r.get("target_enzyme"), r.get("target_family")) == target_id
             and {_norm(r.get("compound_a")), _norm(r.get("compound_b"))} == wanted,
             axis=1,
         )].copy()
@@ -238,19 +368,27 @@ class EvidencePathService:
             "relative_input_band": [round(lower, 3), round(upper, 3)],
             "simulated_max_inhibition": round(max_effect, 3),
             "model": _safe(subset.iloc[0].get("model"), "PESI pseudo-lab response model"),
-            "interpretation": "Use this relative range only to prioritize controlled assay design; it is not a dose, formulation, or field application rate.",
+            "units": "dimensionless_normalized_model_input",
+            "units_label": "Dimensionless normalized model-input units",
+            "interpretation": "Use this dimensionless normalized model-input range only to prioritize controlled assay design; it is not a concentration, dose, formulation, or field application rate.",
             "evidence_class": "pseudo_lab_model_inference",
         }
 
-    def _pathway_context(self, row: dict[str, Any], target_row: dict[str, Any], state_row: dict[str, Any]) -> list[dict[str, Any]]:
-        match = match_herbicide_targets(
+    def _pathway_context(
+        self,
+        row: dict[str, Any],
+        target_row: dict[str, Any],
+        state_row: dict[str, Any],
+        target_match: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        match = target_match or match_herbicide_targets(
             row.get("target_enzyme") or target_row.get("enzyme_name"),
             row.get("target_family") or target_row.get("enzyme_family"),
             row.get("stage") or target_row.get("stage_assigned"),
         )
         rule = next((r for r in HERBICIDE_TARGET_RULES if r.target_family == match.get("herbicide_target_family")), None)
         contexts: list[dict[str, Any]] = []
-        if rule:
+        if rule and match.get("target_match_status") in {"validated", "validated_target"}:
             contexts.append({
                 "pathway": rule.pathway.replace("_", " "),
                 "site_of_action": rule.site_of_action,
@@ -258,7 +396,10 @@ class EvidencePathService:
                 "known_inhibitor_classes": list(rule.known_inhibitor_classes),
                 "resistance_risks": list(rule.resistance_risks),
                 "source": "PESI herbicide target atlas",
-                "evidence_class": rule.evidence_class,
+                "evidence_class": "curated_target_identity_rule",
+                "target_match_status": match.get("target_match_status"),
+                "target_match_basis": match.get("target_match_basis"),
+                "target_match_confidence": match.get("target_match_confidence"),
             })
         substrate = state_row.get("substrate")
         product = state_row.get("product")
@@ -283,23 +424,64 @@ class EvidencePathService:
         target = recommendation.get("target") or rec_row.get("target_enzyme")
         a = recommendation.get("compound_a") or rec_row.get("compound_a")
         b = recommendation.get("compound_b") or rec_row.get("compound_b")
+        target_identity = resolve_enzyme_identity(
+            rec_row.get("target_enzyme") or target,
+            rec_row.get("target_family") or recommendation.get("target_family"),
+            source=rec_row.get("source_evidence"),
+        )
+        target = target_identity.get("canonical_name") or target
+        a_id = str(recommendation.get("compound_a_canonical_id") or rec_row.get("compound_a_canonical_id") or "").strip()
+        b_id = str(recommendation.get("compound_b_canonical_id") or rec_row.get("compound_b_canonical_id") or "").strip()
+        canonical_pair_label = " + ".join(sorted([str(a), str(b)], key=canonicalize_text_key))
+        canonical_pair_key = canonical_compound_pair_key(
+            a_id or a, b_id or b, compound_a_name=a, compound_b_name=b
+        )
         target_row = self._target_row(str(target), out_dir)
         state_row = self._state_row(str(target), out_dir)
         scenario_row = self._scenario_row(str(target), out_dir)
         synergy_row = self._synergy_row(str(target), str(a), str(b), out_dir)
-        compound_a = self._compound_row(str(a), out_dir)
-        compound_b = self._compound_row(str(b), out_dir)
-        food = self._food_context(str(a), str(b), out_dir)
+        compound_a = self._compound_row(str(a), out_dir, a_id or None)
+        compound_b = self._compound_row(str(b), out_dir, b_id or None)
+        food = self._food_context(
+            str(a), str(b), out_dir,
+            compound_a_canonical_id=a_id or None,
+            compound_b_canonical_id=b_id or None,
+        )
         assay = self._assay_priority(str(target), str(a), str(b), out_dir)
-        pathway_context = self._pathway_context(rec_row, target_row, state_row)
+        target_atlas_validation = match_herbicide_targets(
+            target_identity.get("canonical_name") or target,
+            target_identity.get("canonical_family") or rec_row.get("target_family") or target_row.get("enzyme_family"),
+            rec_row.get("stage") or target_row.get("stage_assigned"),
+        )
+        pathway_context = self._pathway_context(rec_row, target_row, state_row, target_atlas_validation)
 
         direct: list[str] = []
+        curated: list[str] = []
+        scenario_context: list[str] = ["User-provided crop, weed, and growth-stage scenario"] if scenario else []
         model: list[str] = []
         proxies: list[str] = []
         weak: list[str] = []
-        for source in [target_row.get("source_evidence"), state_row.get("source_evidence"), rec_row.get("compound_a_source"), rec_row.get("compound_b_source")]:
-            if source and str(source).lower() not in {"nan", "none"}:
+        for source, evidence_class in [
+            (target_row.get("source_evidence"), target_row.get("evidence_class")),
+            (state_row.get("source_evidence"), state_row.get("evidence_class")),
+            (rec_row.get("compound_a_source"), rec_row.get("compound_a_evidence_class")),
+            (rec_row.get("compound_b_source"), rec_row.get("compound_b_evidence_class")),
+        ]:
+            if not source or str(source).lower() in {"nan", "none"}:
+                continue
+            tier = classify_evidence_source(source, evidence_class)
+            if tier == "curated_reference":
+                curated.append(str(source))
+            elif tier == "scenario_context":
+                scenario_context.append(str(source))
+            elif tier == "model_inference":
+                model.append(str(source))
+            elif tier == "proxy_estimate":
+                proxies.append(str(source))
+            elif tier == "direct_occurrence":
                 direct.append(str(source))
+            else:
+                weak.append(str(source))
         if food.get("shared_sources") or food.get("compound_a_sources") or food.get("compound_b_sources"):
             direct.append("FoodDB compound and food occurrence records")
         model.extend([
@@ -322,6 +504,7 @@ class EvidencePathService:
 
         state_reasoning = {
             "target": target,
+            "enzyme_identity": target_identity,
             "growth_stage": _safe(state_row.get("stage_assigned") or target_row.get("stage_assigned") or rec_row.get("stage")),
             "target_class": _safe(state_row.get("target_class") or target_row.get("target_class")),
             "why_state_matters": (
@@ -346,14 +529,34 @@ class EvidencePathService:
             "limitation": "The enzyme-state trajectory is a computational representation and requires biological validation.",
         }
 
+        selectivity_semantics = normalize_selectivity(
+            weed_vulnerability=_first_present(
+                scenario_row.get("weed_vulnerability_score"),
+                rec_row.get("weed_vulnerability_score"),
+            ),
+            crop_vulnerability=_first_present(
+                scenario_row.get("crop_vulnerability_score"),
+                rec_row.get("crop_vulnerability_score"),
+            ),
+            reported_margin=_first_present(
+                scenario_row.get("scenario_selectivity_margin"),
+                rec_row.get("scenario_selectivity_margin"),
+            ),
+            reported_index=_first_present(
+                scenario_row.get("scenario_selectivity_index"),
+                rec_row.get("scenario_selectivity_index"),
+            ),
+        )
+        selectivity_scope = classify_selectivity_scope(scenario_row, rec_row)
         scenario_selectivity = {
             "scenario": scenario or {},
             "why_context_changes_priority": (
                 "The crop, weed, and growth-stage context changes the comparative vulnerability and crop-impact penalties used to order candidates."
             ),
-            "weed_vulnerability": _num(scenario_row.get("weed_vulnerability_score") or rec_row.get("weed_vulnerability_score")),
-            "crop_vulnerability": _num(scenario_row.get("crop_vulnerability_score") or rec_row.get("crop_vulnerability_score")),
-            "selectivity_margin": _num(scenario_row.get("scenario_selectivity_margin") or rec_row.get("scenario_selectivity_margin")),
+            **selectivity_semantics,
+            **selectivity_scope,
+            # Backward-compatible alias now carries the scientifically defined difference.
+            "selectivity_margin": selectivity_semantics.get("selectivity_difference"),
             "stage_relevance": _safe(scenario_row.get("stage_assigned") or rec_row.get("stage")),
             "evidence_class": scenario_row.get("selectivity_evidence_class") or "contextual_model_inference",
             "limitation": "These values are comparative screening proxies, not measured crop-safety or weed-control outcomes.",
@@ -390,22 +593,56 @@ class EvidencePathService:
                 "limitation": "Rule-based compound intelligence is a screening aid, not a safety determination.",
             }
 
+        target_source = target_row.get("source_evidence") or "critical-transition ranking"
+        target_source_tier = classify_evidence_source(target_source, target_row.get("evidence_class"))
+        validated_atlas = target_atlas_validation.get("target_match_status") in {"validated", "validated_target"}
+        atlas_context = next((item for item in pathway_context if item.get("target_match_status") in {"validated", "validated_target"}), None)
+        inhibitor_labels = atlas_context.get("known_inhibitor_classes", []) if atlas_context else []
+        compound_a_food = self.compound_food_sources(
+            str(a), out_dir, limit=1, canonical_compound_id=a_id or None
+        )
+        compound_b_food = self.compound_food_sources(
+            str(b), out_dir, limit=1, canonical_compound_id=b_id or None
+        )
+        compound_a_matched = compound_a_food.get("match_status") == "matched"
+        compound_b_matched = compound_b_food.get("match_status") == "matched"
+        food_semantics = fooddb_zero_result_semantics(
+            query_available=food.get("status") != "not_available",
+            compound_a_matched=compound_a_matched,
+            compound_b_matched=compound_b_matched,
+            shared_record_count=int(food.get("shared_food_count") or 0),
+            individual_record_count=len(food.get("compound_a_sources") or []) + len(food.get("compound_b_sources") or []),
+        )
         path = [
-            {"order": 1, "entity_type": "compound_pair", "label": f"{a} + {b}", "relationship": "screened as a candidate pair", "source": "optimized intervention artifact", "evidence_tier": "model_inference"},
-            {"order": 2, "entity_type": "target_enzyme", "label": target, "relationship": "prioritized for perturbation", "source": target_row.get("source_evidence") or "critical-transition ranking", "evidence_tier": "mixed_evidence"},
-            {"order": 3, "entity_type": "enzyme_family", "label": rec_row.get("target_family") or target_row.get("enzyme_family"), "relationship": "classified within target family", "source": target_row.get("source_evidence") or "curated family/target atlas", "evidence_tier": "direct_or_curated"},
-            {"order": 4, "entity_type": "pathway", "label": pathway_context[0].get("pathway") if pathway_context else "Pathway not directly resolved", "relationship": "acts within pathway context", "source": pathway_context[0].get("source") if pathway_context else None, "evidence_tier": "curated_rule_or_direct"},
-            {"order": 5, "entity_type": "growth_stage", "label": state_reasoning["growth_stage"], "relationship": "linked to enzyme-state transition", "source": state_reasoning.get("source") or "stage model", "evidence_tier": "mixed_evidence"},
-            {"order": 6, "entity_type": "known_inhibitor_class", "label": ", ".join(_split(rec_row.get("known_inhibitor_classes"))) or "No inhibitor class directly listed", "relationship": "provides target-class context", "source": "PESI herbicide target atlas", "evidence_tier": "curated_literature_rule"},
-            {"order": 7, "entity_type": "natural_source_context", "label": f"{food.get('shared_food_count', 0)} shared food-source records", "relationship": "reported occurrence context", "source": "FoodDB-derived food chemistry bundle", "evidence_tier": "direct_occurrence_or_unavailable"},
+            {"order": 1, "entity_type": "compound_pair", "label": canonical_pair_label, "canonical_pair_key": canonical_pair_key, "relationship": "screened as a candidate pair", "source": "optimized intervention artifact", "evidence_tier": "model_inference"},
+            {"order": 2, "entity_type": "target_enzyme", "label": target_identity.get("canonical_name") or target, "canonical_id": target_identity.get("canonical_id"), "reported_alias": target_identity.get("reported_name"), "relationship": "prioritized for perturbation", "source": target_source, "evidence_tier": target_source_tier},
+            {"order": 3, "entity_type": "enzyme_family", "label": target_identity.get("canonical_family"), "reported_family": target_identity.get("family_reported"), "family_validation_status": target_identity.get("family_validation_status"), "relationship": "validated or corrected against canonical identity family", "source": target_source, "evidence_tier": target_source_tier},
+            {"order": 4, "entity_type": "pathway", "label": atlas_context.get("pathway") if atlas_context else "No validated target-atlas pathway mapping", "relationship": "acts within target-specific pathway context" if atlas_context else "target-specific atlas mapping not established", "source": atlas_context.get("source") if atlas_context else None, "evidence_tier": "curated_reference" if atlas_context else "unmapped"},
+            {"order": 5, "entity_type": "growth_stage", "label": state_reasoning["growth_stage"], "relationship": "linked to enzyme-state transition", "source": state_reasoning.get("source") or "stage model", "evidence_tier": "model_inference"},
+            {"order": 6, "entity_type": "known_inhibitor_class", "label": ", ".join(inhibitor_labels) if validated_atlas else "No validated target-specific inhibitor-class mapping", "relationship": "provides target-class context" if validated_atlas else "withheld because target identity was not validated", "source": "PESI herbicide target atlas" if validated_atlas else None, "evidence_tier": "curated_reference" if validated_atlas else "unmapped"},
+            {"order": 7, "entity_type": "natural_source_context", "label": food_semantics["label"], "relationship": food_semantics["interpretation"], "source": "FoodDB-derived food chemistry bundle", "evidence_tier": food_semantics["evidence_tier"]},
         ]
 
+        evidence_adjusted = evidence_adjusted_assay_priority(
+            simulation=assay,
+            identity=target_identity,
+            target_atlas=target_atlas_validation,
+            state_signals=state_reasoning.get("evidence_signals") or {},
+            compound_target_evidence_tier="model_inference",
+        )
+        assay.update(evidence_adjusted)
+
         direct = sorted(set(direct))
-        overall = "mixed evidence with direct source support" if direct else "model-led evidence with limited direct source support"
+        curated = sorted(set(curated))
+        scenario_context = sorted(set(scenario_context))
+        overall = "mixed evidence with direct occurrence support" if direct else "model-led evidence without direct occurrence support"
         return {
             "status": "ok",
             "recommendation_id": recommendation.get("id"),
-            "summary": f"Evidence path for {a} + {b} against {target}.",
+            "summary": f"Evidence path for {canonical_pair_label} against {target}.",
+            "canonical_pair_key": canonical_pair_key,
+            "canonical_pair_label": canonical_pair_label,
+            "enzyme_identity": target_identity,
             "path": path,
             "enzyme_state_reasoning": state_reasoning,
             "scenario_selectivity": scenario_selectivity,
@@ -414,12 +651,16 @@ class EvidencePathService:
                 "compound_a": compound_intelligence(compound_a, str(a)),
                 "compound_b": compound_intelligence(compound_b, str(b)),
             },
-            "natural_source_context": food,
+            "natural_source_context": {**food, "zero_result_semantics": food_semantics},
             "assay_prioritization": assay,
             "pathway_context": pathway_context,
+            "target_atlas_validation": target_atlas_validation,
             "confidence_and_limitations": {
                 "overall": overall,
                 "direct_evidence": direct,
+                "direct_occurrence_evidence": direct,
+                "curated_reference_evidence": curated,
+                "scenario_context": scenario_context,
                 "model_inference": sorted(set(model)),
                 "proxy_assumptions": sorted(set(proxies)),
                 "weak_or_unsupported_assumptions": sorted(set(weak)),
@@ -447,23 +688,76 @@ class EvidencePathService:
             ],
         }
 
-    def compound_food_sources(self, compound: str, out_dir: str | Path | None = None, limit: int = 20) -> dict[str, Any]:
+    def compound_food_sources(
+        self,
+        compound: str,
+        out_dir: str | Path | None = None,
+        limit: int = 20,
+        *,
+        canonical_compound_id: str | None = None,
+    ) -> dict[str, Any]:
         matches = self._df("fooddb-matches", out_dir)
         sources = self._df("food-sources", out_dir)
-        key = _norm(compound)
+        compound_row = self._compound_row(compound, out_dir, canonical_compound_id)
+        identity_id = str(
+            canonical_compound_id
+            or compound_row.get("canonical_compound_id")
+            or canonical_compound_identity(
+                name=compound,
+                smiles=compound_row.get("smiles"),
+                canonical_smiles=compound_row.get("canonical_smiles"),
+                inchikey=compound_row.get("inchikey"),
+                source_id=compound_row.get("compound_id"),
+                source_resource=compound_row.get("source_resource"),
+            )["canonical_compound_id"]
+        )
         match_row: dict[str, Any] = {}
         if not matches.empty:
-            selected = matches[matches.apply(
-                lambda r: key in {_norm(r.get("pesi_compound_name")), _norm(r.get("pesi_compound_name_canonical"))},
-                axis=1,
-            )]
+            if "pesi_compound_canonical_id" in matches.columns:
+                selected = matches[matches["pesi_compound_canonical_id"].astype(str).eq(identity_id)]
+            else:
+                key = _norm(compound)
+                selected = matches[matches.apply(
+                    lambda r: key in {_norm(r.get("pesi_compound_name")), _norm(r.get("pesi_compound_name_canonical"))},
+                    axis=1,
+                )]
+                if len(selected) > 1:
+                    selected = selected.iloc[0:0]
             if not selected.empty:
-                match_row = selected.iloc[0].to_dict()
+                ranked = selected.copy()
+                ranked["_status_rank"] = ranked.get("match_status", "unmatched").astype(str).str.casefold().map(
+                    {"matched": 3, "ambiguous": 2, "unmatched": 1}
+                ).fillna(0)
+                ranked["_confidence"] = pd.to_numeric(ranked.get("match_confidence"), errors="coerce").fillna(0.0)
+                match_row = ranked.sort_values(["_status_rank", "_confidence"], ascending=[False, False]).iloc[0].to_dict()
+
+        raw_match_status = str(match_row.get("match_status") or "unmatched").strip().casefold()
+        has_resolved_identity = bool(
+            match_row
+            and raw_match_status == "matched"
+            and (match_row.get("fooddb_compound_id") or match_row.get("fooddb_public_id") or match_row.get("fooddb_compound_name"))
+        )
+        match_status = "matched" if has_resolved_identity else "ambiguous" if raw_match_status == "ambiguous" else "unmatched"
+
         source_rows: list[dict[str, Any]] = []
-        if not sources.empty:
-            selected_sources = sources[sources["pesi_compound_name"].astype(str).map(_norm).eq(key)].head(max(1, min(limit, 100)))
+        # Hard scientific invariant: only a unique matched identity may emit
+        # occurrence records, and each row must carry that same canonical ID.
+        if has_resolved_identity and not sources.empty:
+            if "pesi_compound_canonical_id" in sources.columns:
+                selected_sources = sources[sources["pesi_compound_canonical_id"].astype(str).eq(identity_id)]
+            else:
+                selected_sources = pd.DataFrame()
+            if "compound_match_status" in selected_sources.columns:
+                selected_sources = selected_sources[selected_sources["compound_match_status"].astype(str).str.casefold().eq("matched")]
+            selected_sources = selected_sources.head(max(1, min(limit, 100)))
             for row in selected_sources.to_dict("records"):
+                if str(row.get("pesi_compound_canonical_id") or "") != identity_id:
+                    continue
                 source_rows.append({
+                    "pesi_compound_canonical_id": identity_id,
+                    "fooddb_compound_id": _nullable(row.get("fooddb_compound_id")),
+                    "fooddb_public_id": _nullable(row.get("fooddb_public_id")),
+                    "fooddb_compound_name": _nullable(row.get("fooddb_compound_name")),
                     "food_id": _nullable(row.get("food_id")),
                     "food_public_id": _nullable(row.get("food_public_id")),
                     "food_name": _nullable(row.get("food_name")),
@@ -478,43 +772,96 @@ class EvidencePathService:
                     "citation_type": _nullable(row.get("citation_type")),
                     "evidence_class": _nullable(row.get("evidence_class")),
                 })
+
         return {
-            "status": "ok" if match_row else "unmatched",
+            "status": "ok",
+            "query_status": "ok",
+            "match_status": match_status,
             "compound": compound,
+            "compound_canonical": canonicalize_text_key(compound),
+            "canonical_compound_id": identity_id,
+            "compound_identity_level": compound_row.get("compound_identity_level"),
+            "structure_backed_identity": bool(compound_row.get("structure_backed_identity")),
+            "canonical_smiles": _nullable(compound_row.get("canonical_smiles")),
+            "inchikey": _nullable(compound_row.get("inchikey")),
             "match": {
                 "fooddb_compound_id": _nullable(match_row.get("fooddb_compound_id")),
                 "fooddb_public_id": _nullable(match_row.get("fooddb_public_id")),
                 "fooddb_compound_name": _nullable(match_row.get("fooddb_compound_name")),
                 "match_method": _nullable(match_row.get("match_method")),
                 "match_confidence": _num(match_row.get("match_confidence")),
-                "match_status": _nullable(match_row.get("match_status")),
+                "match_status": match_status,
                 "evidence_class": _nullable(match_row.get("evidence_class")),
-            } if match_row else None,
+            } if has_resolved_identity else None,
             "sources": source_rows,
             "source_count_returned": len(source_rows),
+            "source_suppressed": match_status != "matched",
+            "source_suppression_reason": (
+                "Food occurrence records require a unique compound-specific FoodDB match."
+                if match_status != "matched" else None
+            ),
             "caveat": FOOD_SOURCE_CAVEAT,
         }
 
-    def pair_food_context(self, compound_a: str, compound_b: str, out_dir: str | Path | None = None) -> dict[str, Any]:
+    def pair_food_context(
+        self,
+        compound_a: str,
+        compound_b: str,
+        out_dir: str | Path | None = None,
+        *,
+        compound_a_canonical_id: str | None = None,
+        compound_b_canonical_id: str | None = None,
+    ) -> dict[str, Any]:
+        context = self._food_context(
+            compound_a,
+            compound_b,
+            out_dir,
+            compound_a_canonical_id=compound_a_canonical_id,
+            compound_b_canonical_id=compound_b_canonical_id,
+        )
+        a_id = str(compound_a_canonical_id or context.get("compound_a_canonical_id") or "")
+        b_id = str(compound_b_canonical_id or context.get("compound_b_canonical_id") or "")
+        label = " + ".join(sorted([compound_a, compound_b], key=canonicalize_text_key))
         return {
             "status": "ok",
             "compound_a": compound_a,
             "compound_b": compound_b,
-            "context": self._food_context(compound_a, compound_b, out_dir),
-            "compound_a_detail": self.compound_food_sources(compound_a, out_dir, limit=10),
-            "compound_b_detail": self.compound_food_sources(compound_b, out_dir, limit=10),
+            "compound_a_canonical_id": a_id or None,
+            "compound_b_canonical_id": b_id or None,
+            "canonical_pair_key": canonical_compound_pair_key(
+                a_id or compound_a,
+                b_id or compound_b,
+                compound_a_name=compound_a,
+                compound_b_name=compound_b,
+            ),
+            "canonical_pair_label": label,
+            "context": context,
+            "compound_a_detail": self.compound_food_sources(
+                compound_a, out_dir, limit=10, canonical_compound_id=a_id or None
+            ),
+            "compound_b_detail": self.compound_food_sources(
+                compound_b, out_dir, limit=10, canonical_compound_id=b_id or None
+            ),
         }
 
     def target_state_reasoning(self, target: dict[str, Any], out_dir: str | Path | None = None) -> dict[str, Any]:
         target_name = target.get("name") or target.get("target")
+        identity = resolve_enzyme_identity(target_name, target.get("family"))
+        target_name = identity.get("canonical_name") or target_name
         target_row = self._target_row(str(target_name), out_dir)
         state = self._state_row(str(target_name), out_dir)
         scenario = self._scenario_row(str(target_name), out_dir)
-        contexts = self._pathway_context({}, target_row, state)
+        target_atlas_validation = match_herbicide_targets(
+            target_name,
+            target.get("family") or target_row.get("enzyme_family"),
+            state.get("stage_assigned") or target_row.get("stage_assigned"),
+        )
+        contexts = self._pathway_context({}, target_row, state, target_atlas_validation)
         return {
             "status": "ok" if target_row or state else "missing",
             "target": target_name,
-            "family": target.get("family") or target_row.get("enzyme_family"),
+            "family": identity.get("canonical_family") or target.get("family") or target_row.get("enzyme_family"),
+            "enzyme_identity": identity,
             "growth_stage": _safe(state.get("stage_assigned") or target_row.get("stage_assigned")),
             "target_class": _safe(state.get("target_class") or target_row.get("target_class")),
             "why_state_matters": f"The target is linked to {_safe(state.get('target_class'), 'a biological function under review')} during {_safe(state.get('stage_assigned') or target_row.get('stage_assigned'), 'the assigned growth stage')}.",
@@ -532,12 +879,16 @@ class EvidencePathService:
                 "uncertainty_penalty": _num(state.get("uncertainty_penalty")),
             },
             "scenario_selectivity": {
-                "weed_vulnerability": _num(scenario.get("weed_vulnerability_score")),
-                "crop_vulnerability": _num(scenario.get("crop_vulnerability_score")),
-                "selectivity_margin": _num(scenario.get("scenario_selectivity_margin")),
+                **normalize_selectivity(
+                    weed_vulnerability=scenario.get("weed_vulnerability_score"),
+                    crop_vulnerability=scenario.get("crop_vulnerability_score"),
+                    reported_margin=scenario.get("scenario_selectivity_margin"),
+                    reported_index=scenario.get("scenario_selectivity_index"),
+                ),
                 "evidence_class": scenario.get("selectivity_evidence_class"),
             },
             "pathway_context": contexts,
+            "target_atlas_validation": target_atlas_validation,
             "source": state.get("source_evidence") or target_row.get("source_evidence"),
             "evidence_class": state.get("evidence_class") or target_row.get("evidence_class"),
             "limitations": [

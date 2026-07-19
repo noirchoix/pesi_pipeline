@@ -4,3 +4,4 @@ include pytest.ini
 recursive-include data/reference *.csv
 recursive-include pesi/config *.yaml
 recursive-include tests *.py
+recursive-include docs *.md *.json

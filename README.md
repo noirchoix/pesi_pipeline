@@ -185,7 +185,7 @@ Validated in this package:
 
 ```text
 Python compile check: passed
-Pytest: 20 passed
+Pytest: 52 non-raw tests passed across isolated validation chunks; 2 dataset-dependent FoodDB tests require raw/food_chemistry
 Svelte check: 0 errors, 0 warnings
 Svelte production build: passed
 FoodDB KG augmentation: idempotency tested
@@ -214,6 +214,26 @@ For shared/public deployments:
 - `docs/EVIDENCE_PATHS.md`
 - `docs/CHANGELOG_FOOD_EVIDENCE_V4.md`
 - `docs/FILE_CHANGES_V4.md`
+- `docs/COMPOUND_IDENTITY_FOODDB_INVARIANTS_V9.md`
+- `docs/data_cards/compound_identity_policy_card.md`
 - `DATA_CARD.md`
 - `MODEL_CARD.md`
 - `BENCHMARK_CARD.md`
+
+## Scientific semantic validation (v0.5.2)
+
+Reports now apply a deterministic scientific consistency gate after artifact aggregation and optional DeepSeek synthesis. The gate separates the weed-minus-crop selectivity difference from the centered ranking index, normalizes FoodDB match states, conservatively classifies evidence tiers, withholds target-atlas inhibitor classes unless target identity is validated, labels assay bands as dimensionless model inputs, and corrects synthesis statements that contradict structured evidence. See `docs/SCIENTIFIC_SEMANTIC_VALIDATION_V7.md`.
+
+## Canonical enzyme identity and evidence-adjusted ranking (v0.6.0)
+
+PESI now normalizes target records through an auditable enzyme-identity registry before target counting, target-atlas annotation, optimization, evidence-path construction, and reporting. Exact identifiers and exact curated aliases are accepted; broad substring matching is prohibited. Reported names and families remain available for audit, while known family conflicts are corrected in canonical outputs.
+
+The release also separates scenario-level crop/weed vulnerability baselines from target-specific selectivity, separates simulation-derived response rank from evidence-adjusted scientific priority, distinguishes FoodDB zero-result states from biological absence, and uses canonical unordered compound-pair keys across optimization and provenance. See `docs/ENZYME_IDENTITY_AND_EVIDENCE_RANKING_V8.md` and `docs/data_cards/enzyme_identity_registry_card.md`.
+
+## Compound identity and FoodDB semantic invariants (v0.7.0)
+
+PESI now assigns structure-backed canonical compound identities before compound deduplication, FoodDB mapping, pair construction, evidence-path generation, and report synthesis. Identity precedence is full InChIKey, RDKit-validated canonical isomeric SMILES, curated source-record identity, and finally an explicitly labelled normalized-name fallback. Invalid SMILES cannot establish structure-backed identity.
+
+FoodDB occurrence rows are joined exclusively through each compound's canonical ID and are emitted only for unique matched mappings. Unmatched or ambiguous compounds cannot inherit occurrence records from a same-name record or from the other member of a compound pair. The report interpreter independently rechecks these invariants, target/selectivity granularity, source-dataset family conflicts, and evidence-adjusted priority before optional DeepSeek synthesis.
+
+Executive synthesis now reports scientific-priority and simulation-coverage counts separately and rejects claims that complete simulation coverage constitutes stronger biological evidence. See `docs/COMPOUND_IDENTITY_FOODDB_INVARIANTS_V9.md` and `docs/data_cards/compound_identity_policy_card.md`.

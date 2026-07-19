@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import uuid
 from datetime import datetime, timezone
@@ -14,6 +15,11 @@ from pesi.api.services.evidence_path_service import EvidencePathService
 from pesi.api.services.job_runner import JobStore, get_job_runner, get_job_store
 from pesi.api.services.llm_client import DeepSeekClient
 from pesi.api.services.report_interpreter import ReportInterpreter
+from pesi.api.services.json_safe import to_json_safe
+from pesi.domain.compound_rules import canonicalize_compound_pair, canonicalize_text_key
+from pesi.domain.enzyme_identity import resolve_enzyme_identity
+from pesi.domain.compound_identity import canonical_compound_identity, canonical_compound_pair_key
+from pesi.domain.herbicide_targets import match_herbicide_targets
 
 CAVEATS = [
     "Computational screening candidate only.",
@@ -93,7 +99,10 @@ def safe_text(value: Any, fallback: str = "Not listed") -> str:
 
 def score(value: Any, digits: int = 2) -> float | None:
     try:
-        return round(float(value), digits)
+        number = float(value)
+        if not math.isfinite(number):
+            return None
+        return round(number, digits)
     except Exception:
         return None
 
@@ -188,8 +197,9 @@ class InferenceAdapter:
                 "recommendation_evidence_paths": True,
                 "enzyme_state_reasoning": True,
                 "assay_prioritization_simulation": True,
-                "ai_explanations": bool(self.settings.ai_enabled and self.settings.deepseek_api_key),
+                "ai_explanations": self.llm.enabled,
             },
+            "ai_configuration": self.llm.configuration_status(),
         }
 
     def start_analysis(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -371,12 +381,19 @@ class InferenceAdapter:
         food_context = self.reader.read_table("pair-food-context", out_dir, limit=1000)
         food_by_pair: dict[str, dict[str, Any]] = {}
         for row in food_context.get("rows", []):
-            key = "||".join(sorted([safe_text(row.get("compound_a"), ""), safe_text(row.get("compound_b"), "")]))
+            key = safe_text(row.get("pair_key"), "")
+            if not key:
+                key = canonical_compound_pair_key(
+                    row.get("compound_a_canonical_id") or row.get("compound_a"),
+                    row.get("compound_b_canonical_id") or row.get("compound_b"),
+                    compound_a_name=row.get("compound_a"),
+                    compound_b_name=row.get("compound_b"),
+                )
             food_by_pair[key] = self._food_summary(row)
         recommendations = []
         for i, row in enumerate(aim4.get("rows", [])):
             card = self.recommendation_card(row, i)
-            pair_key = "||".join(sorted([card["compound_a"], card["compound_b"]]))
+            pair_key = card["canonical_pair_key"]
             card["natural_source_summary"] = food_by_pair.get(pair_key, {
                 "status": "not_available", "shared_food_count": 0, "top_shared_sources": [],
                 "compound_a_top_sources": [], "compound_b_top_sources": [],
@@ -384,7 +401,15 @@ class InferenceAdapter:
             })
             card["evidence_path_available"] = True
             recommendations.append(card)
-        targets = [self.target_card(r, i) for i, r in enumerate(aim3.get("rows", []))]
+        targets = []
+        seen_target_contexts: set[tuple[str, str]] = set()
+        for i, row in enumerate(aim3.get("rows", [])):
+            card = self.target_card(row, i)
+            key = (str(card.get("canonical_id")), str(card.get("stage")))
+            if key in seen_target_contexts:
+                continue
+            seen_target_contexts.add(key)
+            targets.append(card)
         for target in targets:
             target["state_reasoning_available"] = True
         scenario_notes = self.scenario_notes(meta.get("scenario") or {}, scenario.get("rows", []), recommendations, targets)
@@ -414,31 +439,104 @@ class InferenceAdapter:
         }
 
     def recommendation_card(self, row: dict[str, Any], index: int) -> dict[str, Any]:
-        target = safe_text(row.get("target_enzyme"), "Unlisted target")
-        family = safe_text(row.get("target_family"), "Family not listed")
+        target_reported = safe_text(row.get("target_enzyme"), "Unlisted target")
+        family_reported = safe_text(row.get("target_family"), "Family not listed")
+        identity = resolve_enzyme_identity(target_reported, family_reported, source=row.get("source_evidence"))
+        target = safe_text(identity.get("canonical_name"), target_reported)
+        family = safe_text(identity.get("canonical_family"), family_reported)
         stage = human_stage(row.get("stage"))
-        a = safe_text(row.get("compound_a"), "Compound A")
-        b = safe_text(row.get("compound_b"), "Compound B")
+        a_item = {
+            "name": safe_text(row.get("compound_a"), "Compound A"),
+            "canonical_id": safe_text(
+                row.get("compound_a_canonical_id"),
+                canonical_compound_identity(
+                    name=row.get("compound_a"),
+                    canonical_smiles=row.get("compound_a_canonical_smiles"),
+                    inchikey=row.get("compound_a_inchikey"),
+                    source_resource=row.get("compound_a_source"),
+                )["canonical_compound_id"],
+            ),
+            "inchikey": row.get("compound_a_inchikey"),
+            "canonical_smiles": row.get("compound_a_canonical_smiles"),
+            "identity_level": row.get("compound_a_identity_level"),
+            "structure_backed": row.get("compound_a_structure_backed"),
+        }
+        b_item = {
+            "name": safe_text(row.get("compound_b"), "Compound B"),
+            "canonical_id": safe_text(
+                row.get("compound_b_canonical_id"),
+                canonical_compound_identity(
+                    name=row.get("compound_b"),
+                    canonical_smiles=row.get("compound_b_canonical_smiles"),
+                    inchikey=row.get("compound_b_inchikey"),
+                    source_resource=row.get("compound_b_source"),
+                )["canonical_compound_id"],
+            ),
+            "inchikey": row.get("compound_b_inchikey"),
+            "canonical_smiles": row.get("compound_b_canonical_smiles"),
+            "identity_level": row.get("compound_b_identity_level"),
+            "structure_backed": row.get("compound_b_structure_backed"),
+        }
+        ordered = sorted([a_item, b_item], key=lambda item: str(item["canonical_id"]))
+        a_item, b_item = ordered[0], ordered[1]
+        a, b = a_item["name"], b_item["name"]
+        pair_key = safe_text(
+            row.get("canonical_pair_key"),
+            canonical_compound_pair_key(a_item["canonical_id"], b_item["canonical_id"]),
+        )
         features = readable_list(row.get("synergy_match_schema") or row.get("match_schema"), 4)
-        known = readable_list(row.get("known_inhibitor_classes"), 3)
+        atlas = match_herbicide_targets(target, family, row.get("stage"))
+        known = readable_list(atlas.get("known_inhibitor_classes"), 3) if atlas.get("target_match_status") in {"validated", "validated_target"} else []
         strength = evidence_strength(row)
+        selectivity_scope = safe_text(row.get("selectivity_scope"), "scenario_level")
+        selectivity_scope_label = safe_text(
+            row.get("selectivity_scope_label"),
+            "Scenario-level baseline applied to this target context",
+        )
         return {
             "row_index": index,
-            "id": f"rec-{index}-{uuid.uuid5(uuid.NAMESPACE_URL, target + a + b).hex[:10]}",
+            "id": f"rec-{index}-{uuid.uuid5(uuid.NAMESPACE_URL, str(identity.get('canonical_id')) + pair_key + stage).hex[:10]}",
             "target": target,
+            "target_reported": target_reported,
+            "target_canonical_id": identity.get("canonical_id"),
             "target_family": family,
+            "target_family_reported": family_reported,
+            "enzyme_identity": identity,
+            "target_atlas_validation": atlas,
             "stage": stage,
+            "selectivity_scope": selectivity_scope,
+            "selectivity_scope_label": selectivity_scope_label,
             "compound_a": a,
             "compound_b": b,
+            "compound_a_canonical_id": a_item["canonical_id"],
+            "compound_b_canonical_id": b_item["canonical_id"],
+            "compound_a_inchikey": a_item.get("inchikey"),
+            "compound_b_inchikey": b_item.get("inchikey"),
+            "compound_a_canonical_smiles": a_item.get("canonical_smiles"),
+            "compound_b_canonical_smiles": b_item.get("canonical_smiles"),
+            "compound_a_identity_level": a_item.get("identity_level"),
+            "compound_b_identity_level": b_item.get("identity_level"),
+            "compound_a_structure_backed": a_item.get("structure_backed"),
+            "compound_b_structure_backed": b_item.get("structure_backed"),
             "compound_pair": [a, b],
+            "canonical_pair_key": pair_key,
+            "canonical_pair_label": f"{a} + {b}",
             "chemical_class": chemical_class(row.get("phytochemical_class_pair")),
             "evidence_strength": strength,
             "short_reason": f"Review this pair as a candidate for {target} during {stage.lower()}.",
             "why_selected": f"PESI grouped this pair because it combines {chemical_class(row.get('phytochemical_class_pair'))} evidence with {', '.join(features) if features else 'screening support from the artifact set'}.",
-            "biology_note": f"The target is grouped with {family}. {('Related inhibitor-class evidence includes ' + ', '.join(known) + '.') if known else 'Target-specific assays are needed before making a biological claim.'}",
+            "biology_note": (
+                f"Canonical target identity: {target} ({family}). "
+                + (("Validated target-atlas inhibitor-class context includes " + ", ".join(known) + ".") if known else "No target-specific inhibitor-class claim is made for this context.")
+            ),
             "pairing_note": f"The pairing is a computational hypothesis for follow-up screening; it is not measured wet-lab synergy.",
             "validation_note": "Confirm enzyme inhibition, crop/weed response, toxicity, and environmental behavior before any practical use.",
-            "risk_level": "Review carefully" if strength.startswith("Strong") else "Validation required",
+            "risk_level": "Validation required",
+            "model_screening_rank": strength,
+            "evidence_adjusted_priority": row.get("evidence_adjusted_priority") or "Not evaluated in this artifact",
+            "evidence_adjusted_priority_code": row.get("evidence_adjusted_priority_code"),
+            "evidence_adjusted_priority_score": score(row.get("evidence_adjusted_priority_score"), 3),
+            "scientific_priority_gating_reasons": readable_list(row.get("scientific_priority_gating_reasons"), 8),
             "raw_scores": {
                 "review_fit": score(row.get("optimization_objective"), 3),
                 "candidate_fit": score(row.get("intervention_suitability_score"), 3),
@@ -449,21 +547,43 @@ class InferenceAdapter:
         }
 
     def target_card(self, row: dict[str, Any], index: int) -> dict[str, Any]:
-        target = safe_text(row.get("enzyme_name") or row.get("target_enzyme"), "Unlisted target")
-        family = safe_text(row.get("enzyme_family") or row.get("target_family"), "Family not listed")
+        target_reported = safe_text(row.get("enzyme_name_reported") or row.get("enzyme_name") or row.get("target_enzyme"), "Unlisted target")
+        family_reported = safe_text(row.get("enzyme_family_reported") or row.get("enzyme_family") or row.get("target_family"), "Family not listed")
+        identity = resolve_enzyme_identity(target_reported, family_reported, source=row.get("source_evidence"))
+        target = safe_text(identity.get("canonical_name"), target_reported)
+        family = safe_text(identity.get("canonical_family"), family_reported)
         stage = human_stage(row.get("stage_assigned") or row.get("stage"))
-        known = readable_list(row.get("known_inhibitor_classes"), 3)
+        atlas = match_herbicide_targets(target, family, row.get("stage_assigned") or row.get("stage"))
+        known = readable_list(atlas.get("known_inhibitor_classes"), 3) if atlas.get("target_match_status") in {"validated", "validated_target"} else []
+        selectivity_scope = safe_text(row.get("selectivity_scope"), "scenario_level")
+        selectivity_scope_label = safe_text(
+            row.get("selectivity_scope_label"),
+            "Scenario-level baseline applied to this target context",
+        )
         priority = target_priority(row)
+        if atlas.get("target_match_status") in {"validated", "validated_target"}:
+            biology_note = f"Validated target-specific site-of-action context: {atlas.get('herbicide_site_of_action')}."
+        elif atlas.get("target_match_status") == "family_context":
+            biology_note = "Broad family/process context only; no target-specific site-of-action claim is made."
+        else:
+            biology_note = "No target-specific target-atlas mapping was validated."
         return {
             "row_index": index,
-            "id": f"target-{index}-{uuid.uuid5(uuid.NAMESPACE_URL, target).hex[:10]}",
+            "id": f"target-{index}-{uuid.uuid5(uuid.NAMESPACE_URL, str(identity.get('canonical_id')) + stage).hex[:10]}",
             "name": target,
+            "name_reported": target_reported,
+            "canonical_id": identity.get("canonical_id"),
             "family": family,
+            "family_reported": family_reported,
+            "enzyme_identity": identity,
+            "target_atlas_validation": atlas,
             "stage": stage,
+            "selectivity_scope": selectivity_scope,
+            "selectivity_scope_label": selectivity_scope_label,
             "priority": priority,
-            "reason": f"This enzyme appears in the target review list for {stage.lower()}.",
-            "biology_note": f"{safe_text(row.get('herbicide_site_of_action'), 'Biological function should be reviewed against plant pathway evidence')}." if row.get("herbicide_site_of_action") else f"Relevant as a {family} enzyme in the selected evidence set.",
-            "support_note": f"Related inhibitor-class evidence: {', '.join(known)}." if known else "Treat as exploratory until target-specific validation is available.",
+            "reason": f"This canonical target context appears in the computational review list for {stage.lower()}.",
+            "biology_note": biology_note,
+            "support_note": f"Validated inhibitor-class context: {', '.join(known)}." if known else "Treat as exploratory until target-specific validation is available.",
             "validation_note": "Validate target effect, crop tolerance, toxicity, and environmental behavior before any practical claim.",
             "raw_scores": {"target_priority": score(row.get("critical_transition_score"), 3)},
         }
@@ -515,13 +635,34 @@ class InferenceAdapter:
             return {"status": "missing", "message": "No target was available.", "caveats": CAVEATS}
         return self.evidence.target_state_reasoning(chosen, out_dir=out_dir)
 
-    def compound_food_sources(self, compound: str, run_id: str | None = None, limit: int = 20) -> dict[str, Any]:
+    def compound_food_sources(
+        self,
+        compound: str,
+        run_id: str | None = None,
+        limit: int = 20,
+        canonical_compound_id: str | None = None,
+    ) -> dict[str, Any]:
         out_dir, _artifact_dir, _run = self._record_dirs(run_id)
-        return self.evidence.compound_food_sources(compound, out_dir=out_dir, limit=limit)
+        return self.evidence.compound_food_sources(
+            compound, out_dir=out_dir, limit=limit, canonical_compound_id=canonical_compound_id
+        )
 
-    def pair_food_context(self, compound_a: str, compound_b: str, run_id: str | None = None) -> dict[str, Any]:
+    def pair_food_context(
+        self,
+        compound_a: str,
+        compound_b: str,
+        run_id: str | None = None,
+        compound_a_canonical_id: str | None = None,
+        compound_b_canonical_id: str | None = None,
+    ) -> dict[str, Any]:
         out_dir, _artifact_dir, _run = self._record_dirs(run_id)
-        return self.evidence.pair_food_context(compound_a, compound_b, out_dir=out_dir)
+        return self.evidence.pair_food_context(
+            compound_a,
+            compound_b,
+            out_dir=out_dir,
+            compound_a_canonical_id=compound_a_canonical_id,
+            compound_b_canonical_id=compound_b_canonical_id,
+        )
 
     def explain_recommendation(self, payload: dict[str, Any]) -> dict[str, Any]:
         run_id = payload.get("run_id")
@@ -532,13 +673,13 @@ class InferenceAdapter:
         evidence = self.recommendation_evidence({**payload, "recommendation_id": chosen.get("id")})
         fallback = self._recommendation_explanation(chosen, evidence, ai_source="deterministic_fallback")
         system = self._system_prompt()
-        user = json.dumps({
+        user = json.dumps(to_json_safe({
             "task": "Explain one PESI recommendation for a researcher without backend jargon.",
             "recommendation": chosen,
             "evidence_path": evidence,
             "scenario": results.get("scenario"),
             "required_caveats": CAVEATS,
-        }, indent=2)
+        }), indent=2, allow_nan=False)
         response = self.llm.complete_json(system=system, user=user, fallback=fallback)
         if isinstance(response, dict):
             response["evidence_path"] = evidence
@@ -553,13 +694,13 @@ class InferenceAdapter:
         state_reasoning = self.target_state_reasoning({**payload, "target_id": chosen.get("id")})
         fallback = self._target_explanation(chosen, state_reasoning, ai_source="deterministic_fallback")
         system = self._system_prompt()
-        user = json.dumps({
+        user = json.dumps(to_json_safe({
             "task": "Explain one PESI target insight for a researcher without backend jargon.",
             "target": chosen,
             "enzyme_state_reasoning": state_reasoning,
             "scenario": results.get("scenario"),
             "required_caveats": CAVEATS,
-        }, indent=2)
+        }), indent=2, allow_nan=False)
         response = self.llm.complete_json(system=system, user=user, fallback=fallback)
         if isinstance(response, dict):
             response["enzyme_state_reasoning"] = state_reasoning
@@ -628,9 +769,13 @@ class InferenceAdapter:
             f"structure evidence: {signals.get('structure_evidence')}; plant-context evidence: {signals.get('plant_context')}; "
             f"uncertainty penalty: {signals.get('uncertainty_penalty')}."
         )
+        difference = selectivity.get("selectivity_difference")
+        if difference is None:
+            difference = selectivity.get("selectivity_margin")
         selectivity_body = (
             f"The scenario layer estimates weed vulnerability at {selectivity.get('weed_vulnerability')}, crop vulnerability at {selectivity.get('crop_vulnerability')}, "
-            f"and a comparative margin of {selectivity.get('selectivity_margin')}. These are screening proxies requiring comparative assays."
+            f"and a weed-minus-crop difference of {difference}. The centered ranking index is {selectivity.get('selectivity_index')}. "
+            "These are screening proxies requiring comparative assays; the index is not a biological margin."
         )
         return {
             "status": "ok",
@@ -651,11 +796,15 @@ class InferenceAdapter:
 
     @staticmethod
     def _report_pair_key(recommendation: dict[str, Any]) -> str:
-        compounds = [
-            safe_text(recommendation.get("compound_a"), "").strip().casefold(),
-            safe_text(recommendation.get("compound_b"), "").strip().casefold(),
-        ]
-        return "||".join(sorted(compounds))
+        existing = safe_text(recommendation.get("canonical_pair_key"), "").strip()
+        if existing:
+            return existing
+        return canonical_compound_pair_key(
+            recommendation.get("compound_a_canonical_id") or recommendation.get("compound_a"),
+            recommendation.get("compound_b_canonical_id") or recommendation.get("compound_b"),
+            compound_a_name=recommendation.get("compound_a"),
+            compound_b_name=recommendation.get("compound_b"),
+        )
 
     def _report_scope(self, recommendations: list[dict[str, Any]], report_type: str) -> list[dict[str, Any]]:
         """Select top unique pairs, then retain all target contexts for those pairs."""
@@ -671,11 +820,19 @@ class InferenceAdapter:
         # Keep target-specific variants for the chosen pairs, but bound report size.
         max_target_variants = 5 if report_type == "full" else 3
         counts: dict[str, int] = {}
+        seen_contexts: set[tuple[str, str, str]] = set()
         output: list[dict[str, Any]] = []
         for recommendation in selected:
             key = self._report_pair_key(recommendation)
-            if counts.get(key, 0) >= max_target_variants:
+            target_id = safe_text(
+                recommendation.get("target_canonical_id"),
+                resolve_enzyme_identity(recommendation.get("target"), recommendation.get("target_family")).get("canonical_id"),
+            )
+            stage_key = canonicalize_text_key(recommendation.get("stage"))
+            context_key = (key, target_id, stage_key)
+            if context_key in seen_contexts or counts.get(key, 0) >= max_target_variants:
                 continue
+            seen_contexts.add(context_key)
             counts[key] = counts.get(key, 0) + 1
             output.append(recommendation)
         return output
@@ -701,16 +858,23 @@ class InferenceAdapter:
                     str(recommendation.get("compound_a") or ""),
                     str(recommendation.get("compound_b") or ""),
                     run_id=run_id,
+                    compound_a_canonical_id=recommendation.get("compound_a_canonical_id"),
+                    compound_b_canonical_id=recommendation.get("compound_b_canonical_id"),
                 )
 
-        unique_target_names: list[str] = []
-        for recommendation in scoped_recommendations:
-            target = safe_text(recommendation.get("target"), "")
-            if target and target.casefold() not in {name.casefold() for name in unique_target_names}:
-                unique_target_names.append(target)
+        unique_target_ids = {
+            safe_text(
+                recommendation.get("target_canonical_id"),
+                resolve_enzyme_identity(recommendation.get("target"), recommendation.get("target_family")).get("canonical_id"),
+            )
+            for recommendation in scoped_recommendations
+        }
         target_cards = [
             target for target in results.get("targets", [])
-            if safe_text(target.get("name"), "").casefold() in {name.casefold() for name in unique_target_names}
+            if safe_text(
+                target.get("canonical_id"),
+                resolve_enzyme_identity(target.get("name"), target.get("family")).get("canonical_id"),
+            ) in unique_target_ids
         ]
         if not target_cards:
             target_cards = results.get("targets", [])[: (8 if report_type == "full" else 5)]
@@ -720,7 +884,7 @@ class InferenceAdapter:
         ]
 
         scenario = results.get("scenario") or payload.get("scenario") or {}
-        return self.report_interpreter.aggregate(
+        report = self.report_interpreter.aggregate(
             scenario=scenario,
             recommendations=scoped_recommendations,
             targets=target_cards,
@@ -731,6 +895,7 @@ class InferenceAdapter:
             caveats=CAVEATS,
             food_mapping=results.get("food_source_mapping") or {},
         )
+        return to_json_safe(report)
 
     def build_report_html(self, payload: dict[str, Any]) -> str:
         return self.report_interpreter.render_html(self.build_report(payload))

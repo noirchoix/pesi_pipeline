@@ -12,6 +12,12 @@ from typing import Any, Iterable
 import pandas as pd
 
 from pesi.core.utils import ensure_dir, write_json
+from pesi.domain.compound_rules import canonicalize_text_key
+from pesi.domain.compound_identity import (
+    canonical_compound_identity,
+    canonical_compound_pair_key,
+    structure_identifiers,
+)
 
 FOOD_SOURCE_CAVEAT = (
     "Food/source occurrence is contextual evidence only. It does not establish extractability, "
@@ -89,22 +95,7 @@ def _safe_float(value: Any) -> float | None:
 
 
 def _structure_identifiers(smiles: Any) -> tuple[str | None, str | None]:
-    text = "" if smiles is None else str(smiles).strip()
-    if not text or text.lower() in {"nan", "none"}:
-        return None, None
-    try:
-        from rdkit import Chem, RDLogger
-        from rdkit.Chem import inchi
-
-        RDLogger.DisableLog("rdApp.*")
-        mol = Chem.MolFromSmiles(text)
-        if mol is None:
-            return None, None
-        canonical = Chem.MolToSmiles(mol, canonical=True, isomericSmiles=True)
-        key = inchi.MolToInchiKey(mol)
-        return canonical or None, key or None
-    except Exception:
-        return None, None
+    return structure_identifiers(smiles)
 
 
 def _looks_like_smiles(value: Any) -> bool:
@@ -198,8 +189,10 @@ class FoodDBMapper:
 
     def match_compounds(self, compound_pool: pd.DataFrame) -> pd.DataFrame:
         columns = [
-            "pesi_compound_name", "pesi_compound_name_canonical", "pesi_smiles", "pesi_canonical_smiles",
-            "pesi_inchikey", "fooddb_compound_id", "fooddb_public_id", "fooddb_compound_name",
+            "pesi_compound_name", "pesi_compound_name_canonical", "pesi_compound_canonical_id",
+            "pesi_compound_identity_level", "pesi_structure_backed_identity",
+            "pesi_smiles", "pesi_canonical_smiles", "pesi_inchikey", "pesi_inchikey_connectivity",
+            "fooddb_compound_id", "fooddb_public_id", "fooddb_compound_name",
             "fooddb_inchikey", "fooddb_kingdom", "fooddb_superclass", "fooddb_class", "fooddb_subclass",
             "match_method", "match_confidence", "match_status", "candidate_count", "candidate_ids_json",
             "food_count", "quantified_record_count", "evidence_class", "source_resource", "mapping_caveat",
@@ -248,7 +241,17 @@ class FoodDBMapper:
             name = str(raw.get("compound_name") or raw.get("compound_id") or "").strip()
             canonical_name = str(raw.get("compound_name_canonical") or name).strip()
             smiles = raw.get("smiles")
-            canonical_smiles, inchikey = _structure_identifiers(smiles)
+            identity = canonical_compound_identity(
+                name=canonical_name or name,
+                smiles=smiles,
+                canonical_smiles=raw.get("canonical_smiles"),
+                inchikey=raw.get("inchikey"),
+                source_id=raw.get("compound_id"),
+                source_resource=raw.get("source_resource"),
+            )
+            canonical_smiles = identity.get("canonical_smiles")
+            inchikey = identity.get("inchikey")
+            canonical_compound_id = str(raw.get("canonical_compound_id") or identity.get("canonical_compound_id"))
             name_key = normalize_compound_name(canonical_name or name)
             ids: list[int] = []
             method = "unmatched"
@@ -276,9 +279,13 @@ class FoodDBMapper:
             rows.append({
                 "pesi_compound_name": name,
                 "pesi_compound_name_canonical": canonical_name,
+                "pesi_compound_canonical_id": canonical_compound_id,
+                "pesi_compound_identity_level": identity.get("compound_identity_level"),
+                "pesi_structure_backed_identity": bool(identity.get("structure_backed_identity")),
                 "pesi_smiles": smiles,
                 "pesi_canonical_smiles": canonical_smiles,
                 "pesi_inchikey": inchikey,
+                "pesi_inchikey_connectivity": identity.get("inchikey_connectivity"),
                 "fooddb_compound_id": selected,
                 "fooddb_public_id": match.get("public_id"),
                 "fooddb_compound_name": match.get("name"),
@@ -302,7 +309,9 @@ class FoodDBMapper:
 
     def food_sources(self, matches: pd.DataFrame, top_n_per_compound: int = 30) -> pd.DataFrame:
         columns = [
-            "pesi_compound_name", "fooddb_compound_id", "fooddb_public_id", "fooddb_compound_name",
+            "pesi_compound_name", "pesi_compound_name_canonical", "pesi_compound_canonical_id",
+            "pesi_compound_identity_level", "pesi_structure_backed_identity",
+            "fooddb_compound_id", "fooddb_public_id", "fooddb_compound_name",
             "food_id", "food_public_id", "food_name", "food_name_scientific", "food_group", "food_subgroup",
             "standard_content", "orig_content", "orig_unit", "preparation_type", "evidence_records",
             "citation", "citation_type", "occurrence_evidence", "source_confidence", "rank",
@@ -311,7 +320,12 @@ class FoodDBMapper:
         ]
         if matches is None or matches.empty or not self.paths.available:
             return pd.DataFrame(columns=columns)
-        matched = matches[matches["fooddb_compound_id"].notna()].copy()
+        # Source claims require a unique resolved compound match. Ambiguous and
+        # unmatched rows are intentionally withheld from occurrence joins.
+        matched = matches[
+            matches["fooddb_compound_id"].notna()
+            & matches["match_status"].astype(str).str.casefold().eq("matched")
+        ].copy()
         if matched.empty:
             return pd.DataFrame(columns=columns)
         ids = sorted({int(x) for x in matched["fooddb_compound_id"].tolist()})
@@ -359,10 +373,12 @@ class FoodDBMapper:
             con.close()
         if evidence.empty:
             return pd.DataFrame(columns=columns)
-        map_cols = matches[[
-            "pesi_compound_name", "fooddb_compound_id", "match_method", "match_confidence",
+        map_cols = matched[[
+            "pesi_compound_name", "pesi_compound_name_canonical", "pesi_compound_canonical_id",
+            "pesi_compound_identity_level", "pesi_structure_backed_identity",
+            "fooddb_compound_id", "match_method", "match_confidence",
             "match_status", "evidence_class",
-        ]].dropna(subset=["fooddb_compound_id"]).copy()
+        ]].copy()
         map_cols = map_cols.rename(columns={
             "match_method": "compound_match_method",
             "match_confidence": "compound_match_confidence",
@@ -391,7 +407,7 @@ class FoodDBMapper:
             ascending=[True, False, False, False, False, True],
             kind="mergesort",
         )
-        evidence["rank"] = evidence.groupby("pesi_compound_name").cumcount() + 1
+        evidence["rank"] = evidence.groupby("pesi_compound_canonical_id").cumcount() + 1
         evidence = evidence[evidence["rank"] <= max(1, top_n_per_compound)].copy()
         evidence["evidence_class"] = evidence.apply(
             lambda row: (
@@ -410,6 +426,7 @@ def _top_source_records(frame: pd.DataFrame, limit: int = 5) -> list[dict[str, A
     if frame is None or frame.empty:
         return []
     cols = [
+        "pesi_compound_canonical_id", "fooddb_compound_id", "fooddb_public_id", "fooddb_compound_name",
         "food_id", "food_public_id", "food_name", "food_name_scientific", "food_group", "food_subgroup",
         "standard_content", "orig_content", "orig_unit", "preparation_type", "occurrence_evidence",
         "source_confidence", "citation_type", "evidence_class",
@@ -420,33 +437,124 @@ def _top_source_records(frame: pd.DataFrame, limit: int = 5) -> list[dict[str, A
     return records
 
 
-def build_pair_source_context(optimized: pd.DataFrame, sources: pd.DataFrame, max_shared: int = 8) -> tuple[pd.DataFrame, pd.DataFrame]:
+def build_pair_source_context(
+    optimized: pd.DataFrame,
+    sources: pd.DataFrame,
+    matches: pd.DataFrame | None = None,
+    max_shared: int = 8,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Build compound-specific pair occurrence context using canonical IDs.
+
+    The join key is the PESI canonical compound identity, never the display name.
+    This prevents a matched duplicate or the partner compound from donating food
+    sources to an unmatched compound that happens to share a label.
+    """
+
     context_columns = [
-        "pair_key", "compound_a", "compound_b", "shared_food_count", "shared_quantified_food_count",
-        "shared_source_confidence", "shared_foods_json", "compound_a_sources_json", "compound_b_sources_json",
+        "pair_key", "compound_a", "compound_b",
+        "compound_a_canonical", "compound_b_canonical",
+        "compound_a_canonical_id", "compound_b_canonical_id",
+        "compound_a_match_status", "compound_b_match_status",
+        "compound_a_structure_backed", "compound_b_structure_backed",
+        "shared_food_count", "shared_quantified_food_count",
+        "shared_source_confidence", "shared_foods_json",
+        "compound_a_sources_json", "compound_b_sources_json",
         "source_context_status", "evidence_class", "source_resource", "mapping_caveat",
     ]
     evidence_columns = [
-        "pair_key", "compound_a", "compound_b", "food_id", "food_public_id", "food_name",
-        "food_name_scientific", "food_group", "food_subgroup", "compound_a_occurrence_evidence",
-        "compound_b_occurrence_evidence", "compound_a_source_confidence", "compound_b_source_confidence",
-        "shared_source_confidence", "evidence_class", "source_resource", "mapping_caveat",
+        "pair_key", "compound_a", "compound_b",
+        "compound_a_canonical", "compound_b_canonical",
+        "compound_a_canonical_id", "compound_b_canonical_id",
+        "food_id", "food_public_id", "food_name", "food_name_scientific",
+        "food_group", "food_subgroup", "compound_a_occurrence_evidence",
+        "compound_b_occurrence_evidence", "compound_a_source_confidence",
+        "compound_b_source_confidence", "shared_source_confidence",
+        "evidence_class", "source_resource", "mapping_caveat",
     ]
     if optimized is None or optimized.empty:
         return pd.DataFrame(columns=context_columns), pd.DataFrame(columns=evidence_columns)
-    source_groups = {name: group.copy() for name, group in sources.groupby("pesi_compound_name")} if sources is not None and not sources.empty else {}
-    pairs = optimized[["compound_a", "compound_b"]].dropna().drop_duplicates().copy()
-    pairs["pair_key"] = pairs.apply(lambda r: "||".join(sorted([str(r["compound_a"]), str(r["compound_b"])])), axis=1)
+
+    matches = matches.copy() if isinstance(matches, pd.DataFrame) else pd.DataFrame()
+    sources = sources.copy() if isinstance(sources, pd.DataFrame) else pd.DataFrame()
+
+    # Only uniquely matched identities can contribute source records.
+    if not sources.empty:
+        if "compound_match_status" in sources.columns:
+            sources = sources[sources["compound_match_status"].astype(str).str.casefold().eq("matched")].copy()
+        if "pesi_compound_canonical_id" not in sources.columns:
+            sources["pesi_compound_canonical_id"] = ""
+    source_groups = {
+        str(identity): group.copy()
+        for identity, group in sources.groupby("pesi_compound_canonical_id", dropna=False)
+        if str(identity).strip()
+    }
+
+    match_by_id: dict[str, dict[str, Any]] = {}
+    if not matches.empty and "pesi_compound_canonical_id" in matches.columns:
+        for identity, group in matches.groupby("pesi_compound_canonical_id", dropna=False):
+            identity = str(identity or "").strip()
+            if not identity:
+                continue
+            # Stable preference: matched > ambiguous > unmatched, then higher confidence.
+            ranked = group.copy()
+            ranked["_status_rank"] = ranked.get("match_status", "unmatched").astype(str).str.casefold().map(
+                {"matched": 3, "ambiguous": 2, "unmatched": 1}
+            ).fillna(0)
+            ranked["_confidence"] = pd.to_numeric(ranked.get("match_confidence"), errors="coerce").fillna(0.0)
+            match_by_id[identity] = ranked.sort_values(
+                ["_status_rank", "_confidence"], ascending=[False, False], kind="mergesort"
+            ).iloc[0].to_dict()
+
+    def row_identity(row: pd.Series, side: str) -> dict[str, Any]:
+        name = str(row.get(f"compound_{side}") or "").strip()
+        direct_id = str(row.get(f"compound_{side}_canonical_id") or "").strip()
+        identity = canonical_compound_identity(
+            name=name,
+            canonical_smiles=row.get(f"compound_{side}_canonical_smiles"),
+            inchikey=row.get(f"compound_{side}_inchikey"),
+            source_id=row.get(f"compound_{side}_source_id"),
+            source_resource=row.get(f"compound_{side}_source"),
+        )
+        canonical_id = direct_id or str(identity["canonical_compound_id"])
+        match = match_by_id.get(canonical_id, {})
+        status = str(match.get("match_status") or "unmatched").casefold()
+        if status not in {"matched", "ambiguous", "unmatched"}:
+            status = "unmatched"
+        return {
+            "name": name,
+            "name_canonical": canonicalize_text_key(name),
+            "canonical_id": canonical_id,
+            "structure_backed": bool(
+                row.get(f"compound_{side}_structure_backed")
+                if row.get(f"compound_{side}_structure_backed") is not None
+                else identity.get("structure_backed_identity")
+            ),
+            "match_status": status,
+        }
+
+    pair_rows: dict[str, dict[str, Any]] = {}
+    for _, row in optimized.iterrows():
+        a = row_identity(row, "a")
+        b = row_identity(row, "b")
+        ordered = sorted([a, b], key=lambda item: item["canonical_id"])
+        left, right = ordered[0], ordered[1]
+        key = canonical_compound_pair_key(left["canonical_id"], right["canonical_id"])
+        pair_rows.setdefault(key, {"left": left, "right": right})
+
     context_rows: list[dict[str, Any]] = []
     evidence_rows: list[dict[str, Any]] = []
-    for pair in pairs.to_dict("records"):
-        a, b, key = str(pair["compound_a"]), str(pair["compound_b"]), str(pair["pair_key"])
-        a_src = source_groups.get(a, pd.DataFrame())
-        b_src = source_groups.get(b, pd.DataFrame())
-        if not a_src.empty and not b_src.empty:
-            shared = a_src.merge(b_src, on="food_id", suffixes=("_a", "_b"))
-        else:
-            shared = pd.DataFrame()
+    for key, payload in pair_rows.items():
+        left, right = payload["left"], payload["right"]
+        a_src = source_groups.get(left["canonical_id"], pd.DataFrame()) if left["match_status"] == "matched" else pd.DataFrame()
+        b_src = source_groups.get(right["canonical_id"], pd.DataFrame()) if right["match_status"] == "matched" else pd.DataFrame()
+
+        # Reassert compound ownership before any pair merge.
+        if not a_src.empty:
+            a_src = a_src[a_src["pesi_compound_canonical_id"].astype(str).eq(left["canonical_id"])].copy()
+        if not b_src.empty:
+            b_src = b_src[b_src["pesi_compound_canonical_id"].astype(str).eq(right["canonical_id"])].copy()
+
+        shared = a_src.merge(b_src, on="food_id", suffixes=("_a", "_b")) if not a_src.empty and not b_src.empty else pd.DataFrame()
         shared_records: list[dict[str, Any]] = []
         if not shared.empty:
             shared["shared_source_confidence"] = shared[["source_confidence_a", "source_confidence_b"]].min(axis=1)
@@ -472,31 +580,60 @@ def build_pair_source_context(optimized: pd.DataFrame, sources: pd.DataFrame, ma
                 shared_records.append(record)
                 evidence_rows.append({
                     "pair_key": key,
-                    "compound_a": a,
-                    "compound_b": b,
+                    "compound_a": left["name"],
+                    "compound_b": right["name"],
+                    "compound_a_canonical": left["name_canonical"],
+                    "compound_b_canonical": right["name_canonical"],
+                    "compound_a_canonical_id": left["canonical_id"],
+                    "compound_b_canonical_id": right["canonical_id"],
                     **record,
                     "evidence_class": "fooddb_pair_cooccurrence_context",
                     "source_resource": "FoodDB-derived food chemistry bundle",
                     "mapping_caveat": FOOD_SOURCE_CAVEAT,
                 })
+
+        a_records = _top_source_records(a_src, 5) if left["match_status"] == "matched" else []
+        b_records = _top_source_records(b_src, 5) if right["match_status"] == "matched" else []
         shared_quantified = sum(
-            1 for r in shared_records
-            if r.get("compound_a_occurrence_evidence") == "quantified_occurrence"
-            and r.get("compound_b_occurrence_evidence") == "quantified_occurrence"
+            1 for record in shared_records
+            if record.get("compound_a_occurrence_evidence") == "quantified_occurrence"
+            and record.get("compound_b_occurrence_evidence") == "quantified_occurrence"
         )
-        shared_confidence = max([r.get("shared_source_confidence") or 0 for r in shared_records], default=0)
+        shared_confidence = max([record.get("shared_source_confidence") or 0 for record in shared_records], default=0)
+        if left["match_status"] != "matched" or right["match_status"] != "matched":
+            status = "compound_unmatched"
+        elif shared_records:
+            status = "shared_sources_found"
+        elif a_records or b_records:
+            status = "database_query_no_shared_occurrence"
+        else:
+            status = "no_fooddb_source_match"
+
         context_rows.append({
             "pair_key": key,
-            "compound_a": a,
-            "compound_b": b,
+            "compound_a": left["name"],
+            "compound_b": right["name"],
+            "compound_a_canonical": left["name_canonical"],
+            "compound_b_canonical": right["name_canonical"],
+            "compound_a_canonical_id": left["canonical_id"],
+            "compound_b_canonical_id": right["canonical_id"],
+            "compound_a_match_status": left["match_status"],
+            "compound_b_match_status": right["match_status"],
+            "compound_a_structure_backed": left["structure_backed"],
+            "compound_b_structure_backed": right["structure_backed"],
             "shared_food_count": int(len(shared)),
             "shared_quantified_food_count": int(shared_quantified),
             "shared_source_confidence": round(float(shared_confidence), 3),
             "shared_foods_json": _json(shared_records),
-            "compound_a_sources_json": _json(_top_source_records(a_src, 5)),
-            "compound_b_sources_json": _json(_top_source_records(b_src, 5)),
-            "source_context_status": "shared_sources_found" if len(shared) else "individual_sources_only" if (not a_src.empty or not b_src.empty) else "no_fooddb_source_match",
-            "evidence_class": "fooddb_pair_source_context",
+            "compound_a_sources_json": _json(a_records),
+            "compound_b_sources_json": _json(b_records),
+            "source_context_status": status,
+            "evidence_class": (
+                "fooddb_pair_source_context" if status == "shared_sources_found"
+                else "database_query_no_shared_occurrence" if status == "database_query_no_shared_occurrence"
+                else "compound_unmatched" if status == "compound_unmatched"
+                else "no_fooddb_source_context"
+            ),
             "source_resource": "FoodDB-derived food chemistry bundle",
             "mapping_caveat": FOOD_SOURCE_CAVEAT,
         })
@@ -529,21 +666,89 @@ def augment_kg_with_food_sources(
         text = re.sub(r"\s+", "_", str(value).strip())[:180]
         return f"{prefix}:{text}"
 
-    for row in matches[matches["fooddb_compound_id"].notna()].to_dict("records") if not matches.empty else []:
+    # Normalize older mapping tables at this trust boundary. Historical PESI
+    # runs may omit canonical ownership and match-status columns; infer only
+    # what is supported by a concrete FoodDB identity and never allow an
+    # unmatched row to emit occurrence edges.
+    normalized_matches = matches.copy()
+    if not normalized_matches.empty:
+        if "pesi_compound_canonical_id" not in normalized_matches.columns:
+            normalized_matches["pesi_compound_canonical_id"] = normalized_matches.apply(
+                lambda r: canonical_compound_identity(
+                    name=r.get("pesi_compound_name"),
+                    inchikey=r.get("pesi_compound_inchikey"),
+                    canonical_smiles=r.get("pesi_compound_canonical_smiles"),
+                )["canonical_compound_id"],
+                axis=1,
+            )
+        concrete_identity = (
+            normalized_matches.get("fooddb_compound_id", pd.Series(index=normalized_matches.index, dtype=object)).notna()
+            | normalized_matches.get("fooddb_public_id", pd.Series(index=normalized_matches.index, dtype=object)).notna()
+            | normalized_matches.get("fooddb_compound_name", pd.Series(index=normalized_matches.index, dtype=object)).notna()
+        )
+        if "match_status" not in normalized_matches.columns:
+            normalized_matches["match_status"] = concrete_identity.map({True: "matched", False: "unmatched"})
+        else:
+            normalized_matches["match_status"] = normalized_matches["match_status"].astype(str).str.casefold()
+            normalized_matches.loc[~concrete_identity, "match_status"] = "unmatched"
+
+    normalized_sources = sources.copy()
+    if not normalized_sources.empty:
+        ownership: dict[str, str] = {}
+        for row in normalized_matches.to_dict("records") if not normalized_matches.empty else []:
+            if str(row.get("match_status") or "").casefold() != "matched":
+                continue
+            owner = str(row.get("pesi_compound_canonical_id") or "").strip()
+            for value in (row.get("fooddb_compound_id"), row.get("fooddb_public_id")):
+                if value is not None and not (isinstance(value, float) and pd.isna(value)):
+                    ownership[str(value)] = owner
+        if "pesi_compound_canonical_id" not in normalized_sources.columns:
+            normalized_sources["pesi_compound_canonical_id"] = normalized_sources.apply(
+                lambda r: ownership.get(str(r.get("fooddb_compound_id")))
+                or ownership.get(str(r.get("fooddb_public_id")))
+                or "",
+                axis=1,
+            )
+        if "compound_match_status" not in normalized_sources.columns:
+            normalized_sources["compound_match_status"] = normalized_sources["pesi_compound_canonical_id"].astype(str).map(
+                lambda value: "matched" if value.strip() else "unmatched"
+            )
+        normalized_sources = normalized_sources[
+            normalized_sources["compound_match_status"].astype(str).str.casefold().eq("matched")
+            & normalized_sources["pesi_compound_canonical_id"].astype(str).str.strip().ne("")
+        ].copy()
+
+    matched_rows = (
+        normalized_matches[
+            normalized_matches.get("fooddb_compound_id", pd.Series(index=normalized_matches.index, dtype=object)).notna()
+            & normalized_matches["match_status"].astype(str).str.casefold().eq("matched")
+        ]
+        if not normalized_matches.empty
+        else pd.DataFrame()
+    )
+    for row in matched_rows.to_dict("records"):
         pesi = row.get("pesi_compound_name")
+        pesi_identity = row.get("pesi_compound_canonical_id") or pesi
         public = row.get("fooddb_public_id")
         if public is None or (isinstance(public, float) and pd.isna(public)) or not str(public).strip():
             public = row.get("fooddb_compound_id")
         nodes.extend([
-            {"node_id": node_id("Compound", pesi), "node_type": "Compound", "label": pesi, "source_resource": "PESI compound pool", "evidence_class": "real_compound_record"},
+            {
+                "node_id": node_id("Compound", pesi_identity),
+                "node_type": "Compound",
+                "label": pesi,
+                "canonical_compound_id": pesi_identity,
+                "source_resource": "PESI compound pool",
+                "evidence_class": "real_compound_record",
+            },
             {"node_id": node_id("FoodDBCompound", public), "node_type": "FoodDBCompound", "label": row.get("fooddb_compound_name"), "source_resource": "FoodDB-derived food chemistry bundle", "evidence_class": row.get("evidence_class")},
         ])
         edges.append({
-            "src": node_id("Compound", pesi), "dst": node_id("FoodDBCompound", public),
+            "src": node_id("Compound", pesi_identity), "dst": node_id("FoodDBCompound", public),
             "rel": "normalized_to_fooddb_compound", "source_resource": "FoodDB-derived food chemistry bundle",
             "evidence_class": row.get("evidence_class"),
         })
-    for row in sources.to_dict("records") if not sources.empty else []:
+    for row in normalized_sources.to_dict("records") if not normalized_sources.empty else []:
         public = row.get("fooddb_public_id")
         if public is None or (isinstance(public, float) and pd.isna(public)) or not str(public).strip():
             public = row.get("fooddb_compound_id")
@@ -566,8 +771,8 @@ def augment_kg_with_food_sources(
     extension_relations = {"normalized_to_fooddb_compound", "reported_in_food"}
 
     with sqlite3.connect(path) as con:
-        matches.to_sql("fooddb_compound_matches", con, if_exists="replace", index=False)
-        sources.to_sql("fooddb_food_sources", con, if_exists="replace", index=False)
+        normalized_matches.to_sql("fooddb_compound_matches", con, if_exists="replace", index=False)
+        normalized_sources.to_sql("fooddb_food_sources", con, if_exists="replace", index=False)
         pair_context.to_sql("fooddb_pair_source_context", con, if_exists="replace", index=False)
 
         current_nodes = pd.read_sql_query("SELECT * FROM kg_nodes", con)
@@ -674,18 +879,35 @@ def build_food_source_artifacts(
 
     matches = mapper.match_compounds(compound_pool)
     sources = mapper.food_sources(matches, top_n_per_compound=top_n_per_compound)
-    pair_context, pair_evidence = build_pair_source_context(optimized, sources)
+    pair_context, pair_evidence = build_pair_source_context(optimized, sources, matches=matches)
 
     matches.to_csv(out / "compound_fooddb_matches.csv", index=False)
     sources.to_csv(out / "compound_food_sources.csv", index=False)
     pair_context.to_csv(out / "pair_food_source_context.csv", index=False)
     pair_evidence.to_csv(out / "pair_food_source_evidence.csv", index=False)
 
-    matched = int(matches["fooddb_compound_id"].notna().sum()) if not matches.empty else 0
+    matched_mask = (
+        matches["fooddb_compound_id"].notna()
+        & matches["match_status"].astype(str).str.casefold().eq("matched")
+    ) if not matches.empty else pd.Series(dtype=bool)
+    matched = int(matched_mask.sum()) if not matches.empty else 0
     total = int(len(matches))
-    recommended_compounds = sorted(set(optimized.get("compound_a", pd.Series(dtype=str)).dropna().astype(str)) | set(optimized.get("compound_b", pd.Series(dtype=str)).dropna().astype(str))) if optimized is not None and not optimized.empty else []
-    matched_names = set(matches.loc[matches["fooddb_compound_id"].notna(), "pesi_compound_name"].astype(str)) if not matches.empty else set()
-    recommended_matched = len(set(recommended_compounds) & matched_names)
+    recommended_compounds = sorted(
+        set(optimized.get("compound_a", pd.Series(dtype=str)).dropna().astype(str))
+        | set(optimized.get("compound_b", pd.Series(dtype=str)).dropna().astype(str))
+    ) if optimized is not None and not optimized.empty else []
+    recommended_ids = set()
+    if optimized is not None and not optimized.empty:
+        recommended_ids |= set(optimized.get("compound_a_canonical_id", pd.Series(dtype=str)).dropna().astype(str))
+        recommended_ids |= set(optimized.get("compound_b_canonical_id", pd.Series(dtype=str)).dropna().astype(str))
+    matched_ids = set(matches.loc[matched_mask, "pesi_compound_canonical_id"].astype(str)) if not matches.empty else set()
+    if recommended_ids:
+        recommended_matched = len(recommended_ids & matched_ids)
+        recommended_denominator = len(recommended_ids)
+    else:
+        matched_names = set(matches.loc[matched_mask, "pesi_compound_name"].astype(str)) if not matches.empty else set()
+        recommended_matched = len(set(recommended_compounds) & matched_names)
+        recommended_denominator = len(recommended_compounds)
     kg_update = {"nodes_added": 0, "edges_added": 0}
     kg_report_refresh: dict[str, Any] = {"status": "not_requested"}
     if artifact_dir:
@@ -697,9 +919,10 @@ def build_food_source_artifacts(
         "compound_pool_rows": total,
         "matched_compound_rows": matched,
         "compound_match_coverage": round(matched / total, 4) if total else 0.0,
-        "recommended_unique_compounds": len(recommended_compounds),
+        "recommended_unique_compounds": recommended_denominator,
         "recommended_compounds_matched": recommended_matched,
-        "recommended_match_coverage": round(recommended_matched / len(recommended_compounds), 4) if recommended_compounds else 0.0,
+        "recommended_match_coverage": round(recommended_matched / recommended_denominator, 4) if recommended_denominator else 0.0,
+        "compound_identity_policy": "structure-backed canonical IDs with explicit non-structure fallbacks",
         "food_source_rows": int(len(sources)),
         "pair_context_rows": int(len(pair_context)),
         "pairs_with_shared_sources": int(pair_context["shared_food_count"].gt(0).sum()) if not pair_context.empty else 0,
@@ -711,7 +934,7 @@ def build_food_source_artifacts(
             "exact normalized FoodDB primary name",
             "exact normalized FoodDB synonym",
         ],
-        "evidence_policy": "No food-source claim is emitted without a FoodDB compound match and a FoodDB occurrence record.",
+        "evidence_policy": "No food-source claim is emitted without a unique FoodDB match joined through that compound's own canonical identity and occurrence record.",
         "caveat": FOOD_SOURCE_CAVEAT,
         "outputs": [
             "compound_fooddb_matches.csv",

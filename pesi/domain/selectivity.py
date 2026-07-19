@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 
 from pesi.domain.compound_rules import canonicalize_text_key
+from pesi.domain.enzyme_identity import resolve_enzyme_identity
+from pesi.domain.scientific_semantics import classify_selectivity_scope
 from pesi.schemas.scenario import FieldScenario
 
 
@@ -46,16 +48,30 @@ def estimate_contextual_selectivity(target: pd.Series | dict[str, Any], scenario
 
     weed_vulnerability = float(np.clip(0.42 + 0.18 * weed_overlap + 0.16 * meristem_specific + 0.08 * _safe_float(get("critical_transition_score"), 0.5) - 0.10 * detox_or_stress, 0, 1))
     crop_vulnerability = float(np.clip(0.38 + 0.20 * crop_overlap + 0.18 * broad_conserved - 0.10 * meristem_specific + 0.05 * detox_or_stress, 0, 1))
-    selectivity_margin = float(np.clip(weed_vulnerability - crop_vulnerability + 0.5, 0, 1))
+    selectivity_difference = float(np.clip(weed_vulnerability - crop_vulnerability, -1, 1))
+    # Retain a 0..1 centered ranking index for optimization while exposing the
+    # scientifically interpretable difference separately.
+    selectivity_index = float(np.clip(selectivity_difference + 0.5, 0, 1))
 
+    scope = classify_selectivity_scope(dict(target) if hasattr(target, "items") else {})
+    identity = resolve_enzyme_identity(enzyme_name, enzyme_family)
     return {
         "scenario_id": scenario.scenario_id,
         "weed_vulnerability_score": weed_vulnerability,
         "crop_vulnerability_score": crop_vulnerability,
-        "scenario_selectivity_margin": selectivity_margin,
+        "scenario_selectivity_margin": selectivity_difference,
+        "scenario_selectivity_index": selectivity_index,
+        "scenario_selectivity_definition": "weed_vulnerability_score minus crop_vulnerability_score",
         "scenario_crop_taxa": ";".join(scenario.crop_taxa),
         "scenario_weed_taxa": ";".join(scenario.weed_taxa),
         "selectivity_evidence_class": "contextual_model_inference_requires_crop_weed_assay_validation",
+        "selectivity_scope": scope["selectivity_scope"],
+        "selectivity_scope_label": scope["selectivity_scope_label"],
+        "selectivity_scope_reason": scope["selectivity_scope_reason"],
+        "target_specific_evidence_present": scope["target_specific_evidence_present"],
+        "target_specific_inputs": ";".join(scope["target_specific_inputs"]),
+        "enzyme_canonical_id": identity["canonical_id"],
+        "enzyme_name_canonical": identity["canonical_name"],
     }
 
 
@@ -85,14 +101,17 @@ def write_scenario_selectivity_report(targets: pd.DataFrame, out_dir: str | Path
         row.update(estimate_contextual_selectivity(r, scenario))
         rows.append(row)
     df = pd.DataFrame(rows)
-    keep = [c for c in ["enzyme_name", "target_enzyme", "enzyme_family", "target_family", "stage_assigned", "stage", "scenario_selectivity_margin", "weed_vulnerability_score", "crop_vulnerability_score", "selectivity_evidence_class"] if c in df.columns]
+    keep = [c for c in ["enzyme_name", "target_enzyme", "enzyme_family", "target_family", "enzyme_canonical_id", "enzyme_name_canonical", "stage_assigned", "stage", "scenario_selectivity_margin", "scenario_selectivity_index", "scenario_selectivity_definition", "weed_vulnerability_score", "crop_vulnerability_score", "selectivity_scope", "selectivity_scope_label", "selectivity_scope_reason", "target_specific_evidence_present", "target_specific_inputs", "selectivity_evidence_class"] if c in df.columns]
     df[keep].to_csv(out_path / "scenario_selectivity.csv", index=False)
     report = {
         "status": "evaluated",
         "scenario_id": scenario.scenario_id,
         "rows": int(len(df)),
         "mean_selectivity_margin": float(df["scenario_selectivity_margin"].mean()) if "scenario_selectivity_margin" in df.columns else None,
+        "mean_selectivity_index": float(df["scenario_selectivity_index"].mean()) if "scenario_selectivity_index" in df.columns else None,
+        "selectivity_margin_definition": "weed vulnerability minus crop vulnerability",
         "evidence_class": "contextual_model_inference_requires_crop_weed_assay_validation",
+        "selectivity_scope_counts": df.get("selectivity_scope", pd.Series(dtype=str)).value_counts(dropna=False).to_dict(),
     }
     (out_path / "scenario_selectivity_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report

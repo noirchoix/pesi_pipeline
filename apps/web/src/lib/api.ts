@@ -1,3 +1,4 @@
+import { browser } from '$app/environment';
 import type {
   AnalysisProgress,
   Explanation,
@@ -33,10 +34,12 @@ export type QueryParams = Record<string, string | number | boolean | null | unde
 function makeUrl(path: string, params?: QueryParams): string {
   const cleanPath = path.startsWith('/') ? path : `/${path}`;
   const base = path.startsWith('http') ? path : `${BASE_URL}${cleanPath}`;
-  const url = new URL(base, window.location.origin);
+  const origin = browser ? window.location.origin : 'http://localhost';
+  const url = new URL(base, origin);
   for (const [key, value] of Object.entries(params ?? {})) {
     if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value));
   }
+  if (!browser && !path.startsWith('http')) return `${url.pathname}${url.search}`;
   return url.toString();
 }
 
